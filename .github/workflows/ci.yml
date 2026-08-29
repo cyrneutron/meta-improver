@@ -21,7 +21,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v5
         with:
-          version: "latest"
+          version: "0.12.6"
       - name: Sync locked environment
         run: uv sync --frozen
       - name: Run tests
