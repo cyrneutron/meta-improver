@@ -24,6 +24,16 @@ from .ha_adapter import (
     read_decision_context,
     read_task_context,
 )
+from .diagnostics import (
+    DiagnosticError,
+    HADiagnosticCounts,
+    HADiagnosticDecision,
+    HADiagnosticFact,
+    HADiagnosticReport,
+    HADiagnosticTask,
+    build_diagnostic_summary,
+    read_diagnostic_summary,
+)
 __all__ = [
     "IngestionService",
     "CIRunSignal",
@@ -45,4 +55,12 @@ __all__ = [
     "read_fact_context",
     "read_decision_context",
     "read_task_context",
+    "DiagnosticError",
+    "HADiagnosticCounts",
+    "HADiagnosticDecision",
+    "HADiagnosticFact",
+    "HADiagnosticReport",
+    "HADiagnosticTask",
+    "build_diagnostic_summary",
+    "read_diagnostic_summary",
 ]
