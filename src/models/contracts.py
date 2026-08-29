@@ -13,7 +13,14 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 MAX_TEXT = 20_000
 _SECRET_KEY = re.compile(r"(?:password|passwd|secret|token|api[_-]?key|private[_-]?key|authorization)", re.I)
-_SECRET_VALUE = re.compile(r"(?:bearer\s+|ghp_|github_pat_|sk-[A-Za-z0-9_-]+)", re.I)
+_SECRET_VALUE = re.compile(
+    r"(?:"
+    r"\bbearer\s+[A-Za-z0-9._~+/=-]+"
+    r"|(?<![A-Za-z0-9])(?:ghp_|github_pat_|sk-)[A-Za-z0-9_-]+"
+    r"|(?<![A-Za-z0-9])(?:password|passwd|token|api[_-]?key|authorization)\s*[:=]\s*(?:bearer\s+)?[^\s,;]+"
+    r")",
+    re.I,
+)
 
 
 def utc_now() -> datetime:
