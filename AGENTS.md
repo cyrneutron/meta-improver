@@ -1,0 +1,69 @@
+# Harness Agent Entry
+
+This file contains stable repository operating rules. Current milestone state and task-specific context belong in the active task package.
+
+## Context Loading
+
+- Read `harness/harness.yaml`.
+- When a task is assigned, read its `task_plan.md` and only the files it names.
+- Route from the task to the smallest relevant context or standard document; do not preload the whole authored tree.
+
+## Worktree Discipline
+
+- Use an isolated worktree and task branch for implementation work.
+- Preserve unrelated changes in every checkout and stage only task-owned paths.
+- Follow the task's declared base, merge, cleanup, and publication instructions.
+
+## Kernel Workflow
+
+- A task is the work unit and status timeline.
+- A fact is an explicit, append-only promotion of a load-bearing observation; facts are optional `0..N`, not a completion quantity gate.
+- A decision records the load-bearing why: choices, reversals, long-lived boundaries, and downstream work-spawning judgments.
+- Prose mentions do not replace canonical facts, decisions, or relations.
+
+## Relation Rules
+
+- Write relations with canonical IDs.
+- Use `derives` when a decision directly spawned a task and `relates` when a connection was identified later.
+- Use `refines` only for decision-to-decision revision.
+
+## Write Coordination
+
+- Use Harness commands for machine-read fields, lifecycle changes, and relations.
+- Follow repository doc-sync policy for registered authored prose.
+- Generated state under `.harness/` is local-only and must not be committed.
+
+## Harness CLI (software/coding)
+
+- Use `ha <command>` or `npx harness-anything <command>` and inspect command help before composing writes.
+- Create task packages with `ha task create --title "<title>"`; do not hand-scaffold task directories.
+- Select from the effective catalog with `ha preset list`. Packages reported unavailable must not be used to publish guidance or create a task.
+- Milestone creation requires an explicit `--task-class milestone`; the preset ID does not infer task class.
+
+## Repository Scaffolds
+
+- Context lives under `harness/context/`.
+- Standards live only under `harness/governance/standards/`.
+- ADR projections live under `harness/adr/`, milestone documents under `harness/milestones/`, and canonical decision packages under `harness/decisions/`.
+- Read each folder's README instead of duplicating its rules here.
+
+## Architecture-aware Changes
+
+- Before broad source search, check for `harness/context/architecture/architecture-manifest.json`.
+- If present, read the architecture README and only the relevant stable view or flow before choosing an implementation layer.
+- If absent, architecture remains opt-in and ordinary coding work continues without a fabricated model.
+
+## Governance Routing
+
+- Repository workflow and preservation: `harness/governance/standards/repository-governance.md`.
+- Decision writing: `harness/governance/standards/decision-writing.md`.
+- Load only standards applicable to the current task.
+
+## Script Discovery
+
+- Use `ha script list` and `ha script inspect <id>` to inspect vertical script declarations.
+- A declaration is not proof of execution support. Run a script only when inspection explicitly reports execution as available.
+
+## Repository Specifics
+
+Repository-specific rules may be added here after explicit diagnosis; the deterministic base and vertical overlay above remain unchanged.

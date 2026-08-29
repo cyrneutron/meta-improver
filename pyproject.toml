@@ -1,0 +1,25 @@
+[project]
+name = "meta-improver"
+version = "0.0.0"
+description = "A fail-closed, evidence-first improvement proposal engine"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "litellm>=1.40,<2",
+    "pydantic>=2.7,<3",
+    "pyyaml>=6.0,<7",
+    "pytest>=8.0,<9",
+    "rich>=13.7,<14",
+    "typer>=0.12,<1",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
