@@ -63,7 +63,7 @@ class HAFact(ContractModel):
     evidence_source: str = Field(min_length=1, max_length=MAX_TEXT)
     observed_at: str = Field(min_length=1, max_length=100)
     confidence: Literal["low", "medium", "high"]
-    state: Literal["standing", "superseded"]
+    state: Literal["standing", "superseded_fact"]
 
 
 class HADecision(ContractModel):
@@ -250,6 +250,22 @@ def _fact_records(path: Path, max_text: int) -> list[HAFact]:
     current_id: str | None = None
     fields: dict[str, str] = {}
 
+    def decode_scalar(value: str) -> str:
+        """Decode renderer-emitted JSON escapes while preserving plain Markdown scalars."""
+        value = value.strip()
+        if not value.startswith('"') and not value.endswith('"') and not re.search(r"\\(?:[\\\"/bfnrt]|u[0-9a-fA-F]{4})", value):
+            return value
+        if value.startswith('"') != value.endswith('"'):
+            raise HAAdapterError(f"invalid escaped fact scalar: {path}")
+        encoded = value if value.startswith('"') else '"' + value + '"'
+        try:
+            decoded = json.loads(encoded)
+        except json.JSONDecodeError as exc:
+            raise HAAdapterError(f"invalid escaped fact scalar: {path}") from exc
+        if not isinstance(decoded, str) or not decoded:
+            raise HAAdapterError(f"invalid escaped fact scalar: {path}")
+        return decoded
+
     def finish() -> None:
         nonlocal current_id, fields
         if current_id is None:
@@ -296,7 +312,7 @@ def _fact_records(path: Path, max_text: int) -> list[HAFact]:
             key, value = field.groups()
             if key in fields or not value.strip():
                 raise HAAdapterError(f"invalid or duplicate fact field: {path}")
-            fields[key] = value.strip()
+            fields[key] = decode_scalar(value)
         elif line.strip() and not line.startswith("<!--"):
             raise HAAdapterError(f"invalid fact Markdown: {path}")
     finish()

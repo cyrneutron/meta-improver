@@ -300,6 +300,27 @@ def test_fact_context_reads_and_redacts_canonical_records(tmp_path) -> None:
     assert path.exists()
 
 
+def test_fact_context_decodes_renderer_escaped_scalars(tmp_path) -> None:
+    content = f'''# Facts
+
+## Records
+
+### {FACT_ID}
+
+- Statement: Escaped \\\"line\\\\n\\\" token=secret.
+- Evidence source: fixture\\nsource
+- Observed at: 2026-08-29T00:00:00Z
+- Confidence: high
+- State: superseded_fact
+'''
+    _fact_fixture(tmp_path, content=content)
+    record = read_fact_context(tmp_path)[0]
+
+    assert record.statement == 'Escaped "line\\n" [REDACTED]'
+    assert record.evidence_source == "fixture\nsource"
+    assert record.state == "superseded_fact"
+
+
 def test_decision_context_reads_structured_frontmatter_and_redacts(tmp_path) -> None:
     path = _decision_fixture(tmp_path)
     records = read_decision_context(tmp_path)
