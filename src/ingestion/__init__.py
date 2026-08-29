@@ -14,10 +14,14 @@ from .models import (
 from .ha_adapter import (
     HAAdapterError,
     HAContext,
+    HAFact,
+    HADecision,
     HAExecution,
     HAProgressEntry,
     HATaskContext,
     read_ha_context,
+    read_fact_context,
+    read_decision_context,
     read_task_context,
 )
 __all__ = [
@@ -32,9 +36,13 @@ __all__ = [
     "normalize_local_log",
     "HAAdapterError",
     "HAContext",
+    "HAFact",
+    "HADecision",
     "HAExecution",
     "HAProgressEntry",
     "HATaskContext",
     "read_ha_context",
+    "read_fact_context",
+    "read_decision_context",
     "read_task_context",
 ]

@@ -10,6 +10,10 @@ from src.ingestion import (
     HAExecution,
     HAProgressEntry,
     HATaskContext,
+    HAFact,
+    HADecision,
+    read_decision_context,
+    read_fact_context,
     read_ha_context,
     read_task_context,
 )
@@ -137,7 +141,11 @@ def test_task_adapter_symbols_are_exported_from_ingestion_package() -> None:
     assert HAExecution.__name__ == "HAExecution"
     assert HAProgressEntry.__name__ == "HAProgressEntry"
     assert HATaskContext.__name__ == "HATaskContext"
+    assert HAFact.__name__ == "HAFact"
+    assert HADecision.__name__ == "HADecision"
     assert callable(read_ha_context)
+    assert callable(read_fact_context)
+    assert callable(read_decision_context)
     assert callable(read_task_context)
 
 
@@ -230,4 +238,171 @@ def test_task_context_is_read_only_and_ignores_projection(tmp_path) -> None:
     after = [(path.stat().st_mtime_ns, hashlib.sha256(path.read_bytes()).hexdigest()) for path in paths]
 
     assert context.title == "Fixture task"
+    assert before == after
+
+
+FACT_ID = "F-AAAA1111"
+DECISION_ID = "dec_fixture123"
+
+
+def _fact_fixture(root: Path, *, content: str | None = None, filename: str | None = None) -> Path:
+    directory = root / "harness" / "facts"
+    directory.mkdir(parents=True)
+    path = directory / (filename or f"{FACT_ID}.md")
+    content = content or f"""# Facts
+
+## Records
+
+### {FACT_ID}
+
+- Statement: Fixture fact with token=secret.
+- Evidence source: fixture test
+- Observed at: 2026-08-29T00:00:00Z
+- Confidence: high
+- State: standing
+"""
+    path.write_text(content, encoding="utf-8")
+    return path
+
+
+def _decision_fixture(root: Path, *, content: str | None = None, directory_name: str | None = None) -> Path:
+    directory = root / "harness" / "decisions" / (directory_name or f"decision-{DECISION_ID}")
+    directory.mkdir(parents=True)
+    path = directory / "decision.md"
+    content = content or f'''---
+schema: decision-package/v1
+decision_id: {DECISION_ID}
+title: "Fixture decision"
+state: proposed
+question: "Should the fixture remain bounded?"
+chosen: [{{"id": "CH1", "text": "Keep it bounded", "rationale": "Auditability"}}]
+rejected: [{{"id": "RJ1", "text": "Use unbounded input", "whyNot": "Unsafe"}}]
+claims: [{{"id": "C1", "text": "The boundary is load-bearing", "loadBearing": true}}]
+relations: [{{"type": "evidenced-by", "target": "fact/{FACT_ID}"}}]
+---
+
+# Fixture decision
+'''
+    path.write_text(content, encoding="utf-8")
+    return path
+
+
+def test_fact_context_reads_and_redacts_canonical_records(tmp_path) -> None:
+    path = _fact_fixture(tmp_path)
+    records = read_fact_context(tmp_path)
+
+    assert len(records) == 1
+    assert isinstance(records[0], HAFact)
+    assert records[0].fact_id == FACT_ID
+    assert "[REDACTED]" in records[0].statement
+    assert records[0].confidence == "high"
+    assert records[0].state == "standing"
+    assert path.exists()
+
+
+def test_decision_context_reads_structured_frontmatter_and_redacts(tmp_path) -> None:
+    path = _decision_fixture(tmp_path)
+    records = read_decision_context(tmp_path)
+
+    assert len(records) == 1
+    assert isinstance(records[0], HADecision)
+    assert records[0].decision_id == DECISION_ID
+    assert records[0].state == "proposed"
+    assert records[0].chosen[0]["id"] == "CH1"
+    assert records[0].relations[0]["target"] == f"fact/{FACT_ID}"
+    assert path.exists()
+
+
+@pytest.mark.skipif(not (PROJECT_ROOT / "harness/facts").is_dir(), reason="local facts ledger is absent")
+def test_current_mi_facts_and_decisions_read_successfully() -> None:
+    facts = read_fact_context(PROJECT_ROOT)
+    decisions = read_decision_context(PROJECT_ROOT)
+
+    assert len(facts) >= 1
+    assert len(decisions) >= 1
+    assert all(item.fact_id.startswith("F-") for item in facts)
+    assert all(item.decision_id.startswith("dec_") for item in decisions)
+
+
+@pytest.mark.parametrize(
+    "kind,mutate",
+    [
+        ("fact", lambda root: (root / "harness/facts/F-AAAA1111.md").write_text("# broken\n", encoding="utf-8")),
+        ("decision", lambda root: (root / "harness/decisions/decision-dec_fixture123/decision.md").write_text("---\nschema: wrong\n---\n# broken\n", encoding="utf-8")),
+    ],
+)
+def test_fact_and_decision_context_reject_invalid_documents(tmp_path, kind, mutate) -> None:
+    _fact_fixture(tmp_path)
+    _decision_fixture(tmp_path)
+    mutate(tmp_path)
+    reader = read_fact_context if kind == "fact" else read_decision_context
+    with pytest.raises(HAAdapterError):
+        reader(tmp_path)
+
+
+def test_fact_and_decision_context_reject_missing_and_oversized_documents(tmp_path) -> None:
+    _fact_fixture(tmp_path)
+    (tmp_path / "harness/facts/F-AAAA1111.md").unlink()
+    with pytest.raises(HAAdapterError):
+        read_fact_context(tmp_path)
+
+    large_root = tmp_path / "large"
+    _decision_fixture(large_root)
+    decision_path = large_root / "harness/decisions/decision-dec_fixture123/decision.md"
+    decision_path.write_text(decision_path.read_text(encoding="utf-8") + ("x" * 200), encoding="utf-8")
+    with pytest.raises(HAAdapterError):
+        read_decision_context(large_root, max_text=100)
+
+
+def test_fact_and_decision_context_reject_path_escape_and_symlink(tmp_path) -> None:
+    _fact_fixture(tmp_path)
+    outside = tmp_path / "outside.md"
+    outside.write_text("# Facts\n", encoding="utf-8")
+    (tmp_path / "harness/facts/F-BBBB2222.md").symlink_to(outside)
+    with pytest.raises(HAAdapterError):
+        read_fact_context(tmp_path)
+
+    decision_root = tmp_path / "decision"
+    _decision_fixture(decision_root)
+    outside_dir = decision_root / "outside"
+    outside_dir.mkdir()
+    (decision_root / "harness/decisions/decision-dec_escape").symlink_to(outside_dir, target_is_directory=True)
+    with pytest.raises(HAAdapterError):
+        read_decision_context(decision_root)
+
+
+def test_fact_and_decision_context_reject_duplicate_ids(tmp_path) -> None:
+    _fact_fixture(tmp_path)
+    duplicate = tmp_path / "harness/facts/F-BBBB2222.md"
+    duplicate.write_text((tmp_path / "harness/facts/F-AAAA1111.md").read_text(encoding="utf-8"), encoding="utf-8")
+    with pytest.raises(HAAdapterError):
+        read_fact_context(tmp_path)
+
+    decision_root = tmp_path / "decision"
+    _decision_fixture(decision_root)
+    duplicate_dir = decision_root / "harness/decisions/decision-dec_duplicate"
+    duplicate_dir.mkdir()
+    duplicate_path = duplicate_dir / "decision.md"
+    duplicate_path.write_text(
+        (decision_root / "harness/decisions/decision-dec_fixture123/decision.md").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    with pytest.raises(HAAdapterError):
+        read_decision_context(decision_root)
+
+
+def test_fact_and_decision_context_is_read_only_and_ignores_projection(tmp_path) -> None:
+    fact_path = _fact_fixture(tmp_path)
+    decision_path = _decision_fixture(tmp_path)
+    projection = tmp_path / ".harness"
+    (projection / "facts").mkdir(parents=True)
+    (projection / "facts" / fact_path.name).write_text("projection", encoding="utf-8")
+    before = [(path.stat().st_mtime_ns, hashlib.sha256(path.read_bytes()).hexdigest()) for path in (fact_path, decision_path)]
+
+    facts = read_fact_context(tmp_path)
+    decisions = read_decision_context(tmp_path)
+
+    after = [(path.stat().st_mtime_ns, hashlib.sha256(path.read_bytes()).hexdigest()) for path in (fact_path, decision_path)]
+    assert facts[0].fact_id == FACT_ID
+    assert decisions[0].decision_id == DECISION_ID
     assert before == after
