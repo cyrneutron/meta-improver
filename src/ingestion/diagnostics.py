@@ -12,6 +12,7 @@ from src.ingestion.ha_adapter import (
     HADecision,
     HAFact,
     HAExecution,
+    HAProgressEntry,
     HATaskContext,
     read_decision_context,
     read_fact_context,
@@ -45,7 +46,7 @@ class HADiagnosticTask(ContractModel):
     status: str = Field(min_length=1, max_length=100)
     package_path: str = Field(min_length=1, max_length=500)
     executions: list[HAExecution] = Field(default_factory=list, max_length=100)
-    progress_evidence: list[str] = Field(default_factory=list, max_length=1_000)
+    progress_entries: list[HAProgressEntry] = Field(default_factory=list, max_length=1_000)
 
 
 class HADiagnosticFact(ContractModel):
@@ -77,7 +78,7 @@ class HADiagnosticDecision(ContractModel):
 class HADiagnosticReport(ContractModel):
     """The complete bounded diagnostic context for one canonical task."""
 
-    report_schema: str = "ha-diagnostic/v1"
+    schema_: str = Field(default="diagnostic-summary/v1", alias="schema", serialization_alias="schema")
     task: HADiagnosticTask
     counts: HADiagnosticCounts
     facts: list[HADiagnosticFact] = Field(default_factory=list, max_length=500)
@@ -86,19 +87,29 @@ class HADiagnosticReport(ContractModel):
 
     def to_json(self) -> str:
         """Serialize using Pydantic's stable JSON representation."""
-        return self.model_dump_json()
+        return self.model_dump_json(by_alias=True)
 
 
 def _task_summary(context: HATaskContext) -> HADiagnosticTask:
-    evidence = [reference for entry in context.progress_entries for reference in entry.evidence]
     return HADiagnosticTask(
         task_id=context.task_id,
         title=context.title,
         status=context.status,
         package_path=context.package_path,
         executions=context.executions,
-        progress_evidence=evidence,
+        progress_entries=context.progress_entries,
     )
+
+
+def _validate_evidence_reference(reference: str) -> None:
+    if not isinstance(reference, str) or not reference.strip() or "\\" in reference:
+        raise DiagnosticError("progress evidence reference is unsafe")
+    parts = reference.split(":", 2)
+    if len(parts) != 3 or not parts[0].strip() or not parts[1].strip() or not parts[2].strip():
+        raise DiagnosticError("progress evidence reference must be type:path:summary")
+    path = parts[1].strip()
+    if path.startswith("/") or any(segment in {"", ".", ".."} for segment in path.split("/")):
+        raise DiagnosticError("progress evidence path is unsafe")
 
 
 def _fact_summary(fact: HAFact) -> HADiagnosticFact:
@@ -143,6 +154,9 @@ def build_diagnostic_summary(
         raise DiagnosticError(f"canonical diagnostic context is unavailable: {exc}") from exc
 
     task_summary = _task_summary(task)
+    progress_evidence = [reference for entry in task_summary.progress_entries for reference in entry.evidence]
+    for reference in progress_evidence:
+        _validate_evidence_reference(reference)
     fact_summaries = [_fact_summary(fact) for fact in facts]
     decision_summaries = [_decision_summary(decision) for decision in decisions]
     source_refs = [
@@ -155,6 +169,7 @@ def build_diagnostic_summary(
             f"harness/{task.package_path}/executions/{execution.execution_id}.md"
             for execution in task.executions
         ),
+        *progress_evidence,
         *(fact.source_ref for fact in fact_summaries),
         *(decision.source_ref for decision in decision_summaries),
     ]
@@ -165,7 +180,7 @@ def build_diagnostic_summary(
             task_documents=3 + len(task.executions),
             executions=len(task.executions),
             progress_entries=len(task.progress_entries),
-            progress_evidence=len(task_summary.progress_evidence),
+            progress_evidence=len(progress_evidence),
             facts=len(fact_summaries),
             decisions=len(decision_summaries),
         ),

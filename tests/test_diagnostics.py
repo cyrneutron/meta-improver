@@ -1,3 +1,4 @@
+import hashlib
 import json
 from pathlib import Path
 
@@ -108,9 +109,12 @@ def test_current_mi_diagnostic_summary_is_structured_and_serializable() -> None:
     assert report.counts.facts == len(report.facts) >= 1
     assert report.counts.decisions == len(report.decisions) >= 1
     assert report.counts.executions == len(report.task.executions)
-    assert report.task.progress_evidence
+    assert report.schema_ == "diagnostic-summary/v1"
+    assert report.task.progress_entries
     assert "harness/harness.yaml" in report.source_refs
-    assert json.loads(report.to_json()) == report.model_dump(mode="json")
+    payload = json.loads(report.to_json())
+    assert payload["schema"] == "diagnostic-summary/v1"
+    assert payload == report.model_dump(mode="json", by_alias=True)
 
 
 def test_diagnostic_summary_is_deterministic_and_alias_matches(tmp_path) -> None:
@@ -118,8 +122,20 @@ def test_diagnostic_summary_is_deterministic_and_alias_matches(tmp_path) -> None
     projection_facts = tmp_path / ".harness" / "facts"
     projection_facts.mkdir()
     (projection_facts / "F-PROJECT1.md").write_text("projection-token=must-not-be-read", encoding="utf-8")
+    canonical_files = [
+        tmp_path / "harness/harness.yaml",
+        tmp_path / "harness/people.yaml",
+        tmp_path / "harness/tasks/task_diag123-fixture/INDEX.md",
+        tmp_path / "harness/tasks/task_diag123-fixture/task-contract.json",
+        tmp_path / "harness/tasks/task_diag123-fixture/progress.md",
+        tmp_path / "harness/tasks/task_diag123-fixture/executions/exec_diag.md",
+        tmp_path / "harness/facts/F-AAAA1111.md",
+        tmp_path / "harness/decisions/decision-dec_diag123/decision.md",
+    ]
+    before = [(path.stat().st_mtime_ns, hashlib.sha256(path.read_bytes()).hexdigest()) for path in canonical_files]
     first = build_diagnostic_summary(tmp_path, TASK_ID)
     second = read_diagnostic_summary(tmp_path, TASK_ID)
+    after = [(path.stat().st_mtime_ns, hashlib.sha256(path.read_bytes()).hexdigest()) for path in canonical_files]
 
     assert first.model_dump(mode="json") == second.model_dump(mode="json")
     assert first.counts.model_dump() == {
@@ -132,6 +148,7 @@ def test_diagnostic_summary_is_deterministic_and_alias_matches(tmp_path) -> None
         "decisions": 1,
     }
     assert "harness/decisions/decision-dec_diag123/decision.md" in first.source_refs
+    assert before == after
     assert all("secret" not in json.dumps(item.model_dump()) for item in first.facts)
     assert "must-not-be-read" not in first.to_json()
 
@@ -155,3 +172,16 @@ def test_diagnostic_summary_fails_closed_for_malformed_or_oversized_input(tmp_pa
     _diagnostic_fixture(tmp_path / "large")
     with pytest.raises(DiagnosticError):
         build_diagnostic_summary(tmp_path / "large", TASK_ID, max_text=10)
+
+
+def test_diagnostic_summary_rejects_unsafe_progress_evidence(tmp_path) -> None:
+    _diagnostic_fixture(tmp_path)
+    progress = tmp_path / "harness/tasks/task_diag123-fixture/progress.md"
+    progress.write_text(
+        progress.read_text(encoding="utf-8").replace(
+            "test:tests/test_diagnostics.py:fixture", "test:../escape:fixture"
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(DiagnosticError):
+        build_diagnostic_summary(tmp_path, TASK_ID)
