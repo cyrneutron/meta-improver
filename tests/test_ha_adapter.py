@@ -4,7 +4,15 @@ from pathlib import Path
 
 import pytest
 
-from src.ingestion.ha_adapter import HAAdapterError, read_ha_context, read_task_context
+from src.ingestion import (
+    HAAdapterError,
+    HAContext,
+    HAExecution,
+    HAProgressEntry,
+    HATaskContext,
+    read_ha_context,
+    read_task_context,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -123,6 +131,16 @@ def test_current_mi_task_context_reads_successfully() -> None:
     assert any("ledger service" in entry.text for entry in context.progress_entries)
 
 
+def test_task_adapter_symbols_are_exported_from_ingestion_package() -> None:
+    assert HAAdapterError.__name__ == "HAAdapterError"
+    assert HAContext.__name__ == "HAContext"
+    assert HAExecution.__name__ == "HAExecution"
+    assert HAProgressEntry.__name__ == "HAProgressEntry"
+    assert HATaskContext.__name__ == "HATaskContext"
+    assert callable(read_ha_context)
+    assert callable(read_task_context)
+
+
 @pytest.mark.parametrize(
     "mutate",
     [
@@ -135,6 +153,39 @@ def test_current_mi_task_context_reads_successfully() -> None:
 def test_task_context_rejects_invalid_canonical_documents(tmp_path, mutate) -> None:
     package = _task_fixture(tmp_path)
     mutate(package)
+    with pytest.raises(HAAdapterError):
+        read_task_context(tmp_path, TASK_ID)
+
+
+@pytest.mark.parametrize(
+    "index_or_contract",
+    [
+        lambda package: (package / "INDEX.md").write_text(
+            (package / "INDEX.md").read_text(encoding="utf-8").replace("schema: task-package/v2", "schema: task-package/v1"),
+            encoding="utf-8",
+        ),
+        lambda package: (package / "task-contract.json").write_text(
+            (package / "task-contract.json").read_text(encoding="utf-8").replace('"task-contract/v1"', '"task-contract/v2"'),
+            encoding="utf-8",
+        ),
+    ],
+)
+def test_task_context_rejects_unsupported_document_schema(tmp_path, index_or_contract) -> None:
+    package = _task_fixture(tmp_path)
+    index_or_contract(package)
+    with pytest.raises(HAAdapterError):
+        read_task_context(tmp_path, TASK_ID)
+
+
+def test_task_context_rejects_execution_filename_header_mismatch(tmp_path) -> None:
+    package = _task_fixture(tmp_path)
+    (package / "executions" / "exec_fixture.md").rename(package / "executions" / "other.md")
+    with pytest.raises(HAAdapterError):
+        read_task_context(tmp_path, TASK_ID)
+
+
+def test_task_context_rejects_unknown_execution_state(tmp_path) -> None:
+    package = _task_fixture(tmp_path, execution="# Execution exec_fixture\n\n- State: unknown\n")
     with pytest.raises(HAAdapterError):
         read_task_context(tmp_path, TASK_ID)
 

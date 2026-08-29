@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import Field
@@ -28,7 +28,7 @@ class HAExecution(ContractModel):
     """The stable execution identity and state exposed by an execution file."""
 
     execution_id: str = Field(min_length=1, max_length=200)
-    state: str = Field(min_length=1, max_length=100)
+    state: Literal["active", "submitted", "changes_requested", "accepted"]
 
 
 class HAProgressEntry(ContractModel):
@@ -241,6 +241,10 @@ def read_task_context(
 
     index, _body = _read_index_frontmatter(index_path, max_text)
     contract = _read_json(contract_path, max_text)
+    if index.get("schema") != "task-package/v2":
+        raise HAAdapterError(f"unsupported task INDEX schema: {package}")
+    if contract.get("schema") != "task-contract/v1":
+        raise HAAdapterError(f"unsupported task contract schema: {package}")
     if contract.get("taskId") != task_id or index.get("task_id") != task_id:
         raise HAAdapterError(f"task id mismatch in package: {package}")
     package_path = contract.get("packagePath")
@@ -269,7 +273,13 @@ def read_task_context(
             state_match = re.search(r"(?m)^-\s+State:\s*(\S+)\s*$", execution_text)
             if not id_match or not state_match:
                 raise HAAdapterError(f"invalid execution Markdown: {execution_path}")
-            executions.append(HAExecution(execution_id=id_match.group(1), state=state_match.group(1)))
+            execution_id = id_match.group(1)
+            state = state_match.group(1)
+            if execution_path.stem != execution_id:
+                raise HAAdapterError(f"execution filename does not match document id: {execution_path}")
+            if state not in {"active", "submitted", "changes_requested", "accepted"}:
+                raise HAAdapterError(f"unsupported execution state: {execution_path}")
+            executions.append(HAExecution(execution_id=execution_id, state=state))
 
     result = HATaskContext(
         task_id=task_id,
