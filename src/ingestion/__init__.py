@@ -1,5 +1,6 @@
 """Phase 2A normalized signal input contracts."""
 
+from .service import IngestionService
 from .models import (
     CIRunSignal,
     IssueSignal,
@@ -11,6 +12,7 @@ from .models import (
     normalize_local_log,
 )
 __all__ = [
+    "IngestionService",
     "CIRunSignal",
     "IssueSignal",
     "LocalLogSignal",

@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 import pytest
@@ -5,6 +6,7 @@ from pydantic import ValidationError
 
 from src.ingestion import (
     CIRunSignal,
+    IngestionService,
     IssueSignal,
     LocalLogSignal,
     SignalEvent,
@@ -12,6 +14,7 @@ from src.ingestion import (
     normalize_issue,
     normalize_local_log,
 )
+from src.storage import Ledger, LedgerConflictError
 
 
 OBSERVED = datetime(2026, 1, 1, tzinfo=timezone.utc)
@@ -85,3 +88,58 @@ def test_tampered_signature_and_unsafe_log_path_are_rejected() -> None:
         SignalEvent(source="ci", external_id="run-2", content="changed", observed_at=OBSERVED, signature=event.signature)
     with pytest.raises(ValidationError):
         LocalLogSignal(log_id="log-3", path="../escape.log", level="error", content="x", observed_at=OBSERVED)
+
+
+def _service(tmp_path, *, model_version: str = "model-v1") -> IngestionService:
+    return IngestionService(
+        Ledger(tmp_path / "history.db"),
+        base_commit=BASE,
+        strategy_version="ingest-v1",
+        model_version=model_version,
+        prompt_version="prompt-v1",
+    )
+
+
+def test_ingestion_replay_returns_one_canonical_attempt(tmp_path) -> None:
+    event = normalize_issue(
+        IssueSignal(issue_id="issue-replay", title="Failure", body="Details", observed_at=OBSERVED)
+    )
+    service = _service(tmp_path)
+
+    first = service.ingest(event)
+    replay = service.ingest(SignalEvent.model_validate(event.model_dump()))
+
+    assert replay == first
+    assert service.ledger.count() == 1
+    assert replay.input_snapshot.content == "Failure\n\nDetails"
+    assert replay.input_snapshot.metadata["external_id"] == "issue-replay"
+
+
+def test_ingestion_rejects_reused_key_with_different_attempt_data(tmp_path) -> None:
+    event = normalize_issue(
+        IssueSignal(issue_id="issue-conflict", title="Failure", body="Details", observed_at=OBSERVED)
+    )
+    _service(tmp_path).ingest(event)
+
+    with pytest.raises(LedgerConflictError):
+        _service(tmp_path, model_version="model-v2").ingest(event)
+
+
+def test_concurrent_ingestion_of_same_event_keeps_one_attempt(tmp_path) -> None:
+    event = normalize_ci_run(
+        CIRunSignal(
+            run_id="run-concurrent",
+            workflow="CI",
+            status="completed",
+            conclusion="failure",
+            commit_sha=BASE,
+            output="pytest failed",
+            observed_at=OBSERVED,
+        )
+    )
+    service = _service(tmp_path)
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        attempts = list(pool.map(lambda _: service.ingest(event), range(8)))
+
+    assert len({attempt.attempt_id for attempt in attempts}) == 1
+    assert service.ledger.count() == 1
