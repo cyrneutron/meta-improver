@@ -32,6 +32,7 @@ _SECRET = re.compile(
 MAX_TEXT = 20_000
 MAX_TESTS = 200
 MAX_RISKS = 200
+MAX_REFERENCE_ID = 200
 
 
 def _canonical(value: Any) -> str:
@@ -96,6 +97,9 @@ def _value_digest(value: Any, field_name: str) -> str:
             "plan_hash",
             "payload_hash",
             "token_hash",
+            "review_digest",
+            "consent_digest",
+            "consent_hash",
             "signature",
             "digest",
             "hash",
@@ -133,6 +137,136 @@ class _CloseoutContract(BaseModel):
         validate_assignment=True,
         populate_by_name=True,
     )
+
+
+class _HAReferenceContract(_CloseoutContract):
+    """Common immutable-ish identity and binding fields for HA references."""
+
+    task_id: str = Field(min_length=1, max_length=MAX_REFERENCE_ID)
+    execution_id: str = Field(min_length=1, max_length=MAX_REFERENCE_ID)
+    review_id: str = Field(min_length=1, max_length=MAX_REFERENCE_ID)
+    review_digest: str = Field(
+        pattern=_HASH, validation_alias=AliasChoices("review_digest", "review_hash")
+    )
+    content_digest: str = Field(
+        pattern=_HASH, validation_alias=AliasChoices("content_digest", "content_hash")
+    )
+    packet_digest: str = Field(
+        pattern=_HASH, validation_alias=AliasChoices("packet_digest", "packet_hash")
+    )
+    issued_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        validation_alias=AliasChoices(
+            "issued_at", "created_at", "approved_at", "valid_from", "not_before"
+        ),
+    )
+    expires_at: datetime = Field(
+        validation_alias=AliasChoices("expires_at", "valid_until", "expiry")
+    )
+    reference_hash: str | None = Field(
+        default=None,
+        pattern=_HASH,
+        validation_alias=AliasChoices(
+            "reference_hash", "ref_hash", "reference_digest", "digest", "hash"
+        ),
+    )
+
+    @field_validator("task_id", "execution_id", "review_id")
+    @classmethod
+    def safe_reference_identity(cls, value: str, info: Any) -> str:
+        return _safe_identifier(value, info.field_name)
+
+    @field_validator("issued_at", "expires_at")
+    @classmethod
+    def reference_timestamps_utc(cls, value: datetime, info: Any) -> datetime:
+        return _utc(value, info.field_name)
+
+    @model_validator(mode="after")
+    def validate_reference_window_and_hash(self) -> _HAReferenceContract:
+        if self.expires_at <= self.issued_at:
+            raise ValueError("HA reference expiry must be after issued_at")
+        expected = _digest(
+            self.model_dump(mode="json", by_alias=True, exclude={"reference_hash"})
+        )
+        if self.reference_hash is not None and self.reference_hash != expected:
+            raise ValueError("reference_hash does not match canonical contents")
+        object.__setattr__(self, "reference_hash", expected)
+        return self
+
+
+class HAReviewReference(_HAReferenceContract):
+    """Hash-bound, bounded reference to one Harness Anything review."""
+
+    schema_: Literal["ha-review-reference/v1"] = Field(
+        default="ha-review-reference/v1", alias="schema", serialization_alias="schema"
+    )
+
+    @property
+    def review_hash(self) -> str:
+        return self.review_digest
+
+
+class HAConsentReference(_HAReferenceContract):
+    """Hash-bound review consent tied to task, execution, and approver."""
+
+    schema_: Literal["ha-consent-reference/v1"] = Field(
+        default="ha-consent-reference/v1", alias="schema", serialization_alias="schema"
+    )
+    consent_id: str = Field(min_length=1, max_length=MAX_REFERENCE_ID)
+    consent_digest: str = Field(
+        pattern=_HASH,
+        validation_alias=AliasChoices(
+            "consent_digest", "consent_hash", "token_hash", "consent"
+        ),
+    )
+    approver_identity: str = Field(
+        min_length=1,
+        max_length=MAX_REFERENCE_ID,
+        validation_alias=AliasChoices(
+            "approver_identity", "approver", "approver_id", "actor", "identity"
+        ),
+    )
+
+    @field_validator("consent_id")
+    @classmethod
+    def safe_consent_identity(cls, value: str) -> str:
+        return _safe_identifier(value, "consent_id")
+
+    @field_validator("approver_identity")
+    @classmethod
+    def safe_approver_identity(cls, value: str) -> str:
+        return _safe_identifier(value, "approver_identity")
+
+    @property
+    def consent_hash(self) -> str:
+        return self.consent_digest
+
+    @property
+    def approver(self) -> str:
+        return self.approver_identity
+
+    @property
+    def approver_id(self) -> str:
+        return self.approver_identity
+
+    @property
+    def review_hash(self) -> str:
+        return self.review_digest
+
+    @property
+    def content_hash(self) -> str:
+        return self.content_digest
+
+    @property
+    def packet_hash(self) -> str:
+        return self.packet_digest
+
+
+# Descriptive spelling used by integrations that treat review and consent as
+# one reference family.  The concrete models remain available separately.
+HAReviewConsentReference = HAConsentReference
+HAReviewRef = HAReviewReference
+HAConsentRef = HAConsentReference
 
 
 class CloseoutPacket(_CloseoutContract):
@@ -215,6 +349,26 @@ class CloseoutPacket(_CloseoutContract):
         pattern=_HASH,
         validation_alias=AliasChoices("consent", "consent_hash", "consent_digest", "token_hash"),
     )
+    review_reference: HAReviewReference | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "review_reference",
+            "review_ref",
+            "ha_review",
+            "ha_review_reference",
+            "ha_review_ref",
+        ),
+    )
+    consent_reference: HAConsentReference | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "consent_reference",
+            "consent_ref",
+            "ha_consent",
+            "ha_consent_reference",
+            "ha_consent_ref",
+        ),
+    )
     publication: str = Field(
         pattern=_HASH,
         validation_alias=AliasChoices("publication", "publication_hash", "publication_digest"),
@@ -255,6 +409,16 @@ class CloseoutPacket(_CloseoutContract):
     )
     @classmethod
     def artifact_digest(cls, value: Any, info: Any) -> str:
+        # Structured HA references expose the artifact digest under a more
+        # specific name than the generic digest extractor expects.
+        mapped = _mapping(value)
+        if mapped is not None:
+            if info.field_name == "review" and isinstance(mapped.get("review_digest"), str):
+                return mapped["review_digest"]
+            if info.field_name == "consent":
+                for key in ("consent_digest", "consent_hash", "token_hash"):
+                    if isinstance(mapped.get(key), str):
+                        return mapped[key]
         return _value_digest(value, info.field_name)
 
     @field_validator("signal", mode="before")
@@ -342,10 +506,101 @@ class CloseoutPacket(_CloseoutContract):
                 raise ValueError("acceptance receipt candidate binding does not match")
             if patch is not None and plan_patch is not None and _value_digest(patch, "patch") != plan_patch:
                 raise ValueError("acceptance receipt patch binding does not match")
+
+        # HA review and consent references are optional for compatibility with
+        # older packet producers.  When supplied, every binding is checked
+        # before the references are compacted to their own digest.
+        review_reference = data.get("review_reference")
+        if review_reference is None:
+            review_reference = data.get(
+                "review_ref",
+                data.get("ha_review", data.get("ha_review_reference", data.get("ha_review_ref"))),
+            )
+        if review_reference is None:
+            candidate_review = data.get("review")
+            if (_mapping(candidate_review) or {}).get("schema") == "ha-review-reference/v1":
+                review_reference = candidate_review
+        consent_reference = data.get("consent_reference")
+        if consent_reference is None:
+            consent_reference = data.get(
+                "consent_ref",
+                data.get("ha_consent", data.get("ha_consent_reference", data.get("ha_consent_ref"))),
+            )
+        if consent_reference is None:
+            candidate_consent = data.get("consent")
+            if (_mapping(candidate_consent) or {}).get("schema") == "ha-consent-reference/v1":
+                consent_reference = candidate_consent
+
+        task_id = data.get("task_id", data.get("ha_task_id", data.get("task")))
+        execution_id = data.get("execution_id", data.get("ha_execution_id", data.get("execution")))
+        review_digest = _value_digest(data.get("review", data.get("review_digest")), "review")
+        consent_digest = _value_digest(data.get("consent", data.get("consent_digest")), "consent")
+        candidate_digest = _value_digest(
+            data.get("candidate", data.get("candidate_hash", data.get("candidate_digest"))),
+            "candidate",
+        )
+        pipeline_digest = _value_digest(
+            data.get("pipeline_receipt", data.get("pipeline_receipt_hash", data.get("pipeline_digest"))),
+            "pipeline_receipt",
+        )
+
+        def check_reference(reference: Any, *, consent: bool) -> None:
+            mapped = _mapping(reference)
+            if mapped is None:
+                raise ValueError("HA reference must be a structured mapping")
+            if task_id is not None:
+                expected = _mapping(task_id)
+                expected_id = expected.get("task_id") if expected else task_id
+                supplied_id = mapped.get("task_id", mapped.get("ha_task_id"))
+                if supplied_id != expected_id:
+                    raise ValueError("HA reference task_id binding does not match")
+            if execution_id is not None:
+                expected = _mapping(execution_id)
+                expected_id = expected.get("execution_id") if expected else execution_id
+                supplied_id = mapped.get("execution_id", mapped.get("ha_execution_id"))
+                if supplied_id != expected_id:
+                    raise ValueError("HA reference execution_id binding does not match")
+            supplied_review = mapped.get("review_digest", mapped.get("review_hash"))
+            if supplied_review != review_digest:
+                raise ValueError("HA reference review_digest binding does not match")
+            supplied_content = mapped.get("content_digest", mapped.get("content_hash"))
+            if supplied_content != candidate_digest:
+                raise ValueError("HA reference content_digest binding does not match candidate")
+            supplied_packet = mapped.get("packet_digest", mapped.get("packet_hash"))
+            if supplied_packet not in (pipeline_digest, acceptance_hash):
+                raise ValueError("HA reference packet_digest binding does not match pipeline or acceptance")
+            if consent:
+                supplied_consent = mapped.get(
+                    "consent_digest",
+                    mapped.get("consent_hash", mapped.get("token_hash", mapped.get("consent"))),
+                )
+                if supplied_consent != consent_digest:
+                    raise ValueError("HA consent reference consent_digest binding does not match consent")
+
+        if review_reference is not None:
+            check_reference(review_reference, consent=False)
+        if consent_reference is not None:
+            check_reference(consent_reference, consent=True)
         return data
 
     @model_validator(mode="after")
     def derive_digests_and_hash(self) -> CloseoutPacket:
+        for label, reference in (
+            ("review", self.review_reference),
+            ("consent", self.consent_reference),
+        ):
+            if reference is None:
+                continue
+            if not (reference.issued_at <= self.created_at < reference.expires_at):
+                raise ValueError(f"HA {label} reference is expired or not yet valid")
+        if self.review_reference is not None and self.consent_reference is not None:
+            if (
+                self.review_reference.task_id != self.consent_reference.task_id
+                or self.review_reference.execution_id != self.consent_reference.execution_id
+                or self.review_reference.review_id != self.consent_reference.review_id
+            ):
+                raise ValueError("HA review and consent references are not bound together")
+
         expected_tests = _digest(self.tests)
         if self.tests_digest is not None and self.tests_digest != expected_tests:
             raise ValueError("tests_digest does not match canonical tests")
@@ -426,6 +681,12 @@ rehydrate_packet = rehydrate_closeout_packet
 __all__ = [
     "CloseoutError",
     "CloseoutPacket",
+    "HAConsentReference",
+    "HAReviewConsentReference",
+    "HAReviewRef",
+    "HAReviewReference",
+    "HAConsentRef",
+    "MAX_REFERENCE_ID",
     "MAX_RISKS",
     "MAX_TESTS",
     "MAX_TEXT",

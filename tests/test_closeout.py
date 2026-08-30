@@ -3,7 +3,13 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from src.attribution import BaselineObservation
-from src.closeout import CloseoutError, CloseoutPacket, rehydrate_closeout_packet
+from src.closeout import (
+    CloseoutError,
+    CloseoutPacket,
+    HAConsentReference,
+    HAReviewReference,
+    rehydrate_closeout_packet,
+)
 from src.ingestion import HAExecution, HATaskContext, SignalEvent, SignalSource
 
 
@@ -150,3 +156,98 @@ def test_packet_bounds_and_utc_are_fail_closed(field: str, value: object) -> Non
 def test_unknown_fields_are_forbidden() -> None:
     with pytest.raises(ValueError):
         _packet(unexpected="value")
+
+
+def _ha_references(**overrides: object) -> tuple[HAReviewReference, HAConsentReference]:
+    review_values: dict[str, object] = {
+        "task_id": "task_closeout",
+        "execution_id": "exec_closeout",
+        "review_id": "review_1",
+        "review_digest": HASH,
+        "content_digest": HASH,
+        "packet_digest": HASH,
+        "issued_at": NOW - timedelta(minutes=1),
+        "expires_at": NOW + timedelta(hours=1),
+    }
+    consent_values: dict[str, object] = {
+        "task_id": "task_closeout",
+        "execution_id": "exec_closeout",
+        "review_id": "review_1",
+        "consent_id": "consent_1",
+        "review_digest": HASH,
+        "content_digest": HASH,
+        "packet_digest": HASH,
+        "consent_digest": HASH,
+        "approver_identity": "reviewer/alice",
+        "issued_at": NOW - timedelta(minutes=1),
+        "expires_at": NOW + timedelta(hours=1),
+    }
+    review_values.update(overrides)
+    consent_values.update(overrides)
+    return HAReviewReference(**review_values), HAConsentReference(**consent_values)
+
+
+def test_structured_ha_review_and_consent_references_bind_packet() -> None:
+    review, consent = _ha_references()
+    packet = _packet(
+        review=review,
+        consent=consent,
+        review_reference=review,
+        consent_reference=consent,
+    )
+    assert packet.review == HASH
+    assert packet.consent == HASH
+    assert packet.review_reference is not None
+    assert packet.consent_reference is not None
+    assert rehydrate_closeout_packet(packet).model_dump() == packet.model_dump()
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("task_id", "task_other"),
+        ("execution_id", "exec_other"),
+        ("review_id", "review_other"),
+        ("review_digest", "sha256:" + "b" * 64),
+        ("content_digest", "sha256:" + "b" * 64),
+        ("packet_digest", "sha256:" + "b" * 64),
+    ],
+)
+def test_structured_ha_reference_wrong_bindings_fail_closed(field: str, value: object) -> None:
+    review, consent = _ha_references(**{field: value})
+    if field == "review_id":
+        review_values = review.model_dump()
+        review_values["review_id"] = value
+        review = HAReviewReference(**review_values)
+        _review, consent = _ha_references()
+    with pytest.raises(ValueError, match="HA reference|binding|bound"):
+        _packet(review=review, consent=consent, review_reference=review, consent_reference=consent)
+
+
+def test_structured_ha_reference_expiry_is_checked_at_closeout_time() -> None:
+    review, consent = _ha_references(expires_at=NOW - timedelta(seconds=1))
+    with pytest.raises(ValueError, match="expired|valid"):
+        _packet(review=review, consent=consent, review_reference=review, consent_reference=consent)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("task_id", "../task"),
+        ("execution_id", "exec//closeout"),
+        ("review_id", "review;rm"),
+        ("approver_identity", "Authorization: Bearer abc"),
+    ],
+)
+def test_structured_ha_reference_unsafe_identity_fails_closed(field: str, value: object) -> None:
+    with pytest.raises(ValueError):
+        _ha_references(**{field: value})
+
+
+def test_structured_ha_reference_hash_tampering_is_rejected() -> None:
+    review, _consent = _ha_references()
+    values = review.model_dump()
+    values["review_digest"] = "sha256:" + "b" * 64
+    values["reference_hash"] = review.reference_hash
+    with pytest.raises(ValueError, match="reference_hash|canonical"):
+        HAReviewReference(**values)
