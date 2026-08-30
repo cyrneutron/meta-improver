@@ -1,6 +1,16 @@
 """Sandbox security contracts and pure worktree planning."""
 
 from .contracts import BoundedArgv, ContainerPolicy, WorktreeRequest
+from .runner import (
+    ContainerRunRequest,
+    ContainerRunResult,
+    ContainerRunStatus,
+    ContainerRunner,
+    ContainerRunnerError,
+    ContainerTransport,
+    ContainerTransportReceipt,
+    FakeContainerTransport,
+)
 from .worktree import (
     AbsolutePathEntry,
     GitOperation,
@@ -27,6 +37,14 @@ from .worktree import (
 __all__ = [
     "BoundedArgv",
     "ContainerPolicy",
+    "ContainerRunRequest",
+    "ContainerRunResult",
+    "ContainerRunStatus",
+    "ContainerRunner",
+    "ContainerRunnerError",
+    "ContainerTransport",
+    "ContainerTransportReceipt",
+    "FakeContainerTransport",
     "AbsolutePathEntry",
     "GitOperation",
     "RepositoryBoundary",
