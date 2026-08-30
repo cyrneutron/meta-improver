@@ -177,6 +177,12 @@ def _rehydrate_plan(plan: WorktreePlan) -> WorktreePlan:
     return hydrated
 
 
+def rehydrate_worktree_plan(plan: WorktreePlan) -> WorktreePlan:
+    """Public integrity boundary for consumers deriving plans from a worktree plan."""
+
+    return _rehydrate_plan(plan)
+
+
 def _validate_receipt_observation_for_plan(
     plan: WorktreePlan,
     receipt: WorktreeCreationReceipt,
@@ -670,5 +676,6 @@ __all__ = [
     "plan_cleanup",
     "plan_recovery",
     "plan_worktree",
+    "rehydrate_worktree_plan",
     "rehydrate_action_plan",
 ]
