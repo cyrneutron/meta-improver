@@ -320,7 +320,9 @@ class InMemoryDispatchCoordinator:
             return
         selected = self.approval if approval is None else approval
         if selected is True:
-            return
+            raise SchedulerError(
+                f"{request.action.value} requires a complete approval token"
+            )
         if selected is False or selected is None:
             raise SchedulerError(f"{request.action.value} requires explicit approval")
         try:
@@ -335,9 +337,9 @@ class InMemoryDispatchCoordinator:
                 elif not (token.approved_at <= now < token.expires_at):
                     raise SchedulerError("approval token is expired or not yet valid")
                 return
-            scope = ApprovalScope(selected)
-            if scope.value != request.action.value:
-                raise SchedulerError("approval scope does not match action")
+            raise SchedulerError(
+                f"{request.action.value} requires a complete approval token"
+            )
         except SchedulerError:
             raise
         except (ProposalError, ValueError, TypeError) as exc:

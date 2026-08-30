@@ -11,6 +11,7 @@ from src.scheduler import (
     rehydrate_dispatch_receipt,
     rehydrate_dispatch_request,
 )
+from src.proposal import ApprovalScope, ApprovalToken
 
 
 HASH = "sha256:" + "a" * 64
@@ -86,9 +87,29 @@ def test_bounded_exponential_backoff_and_circuit_breaker() -> None:
 def test_push_and_create_pr_require_matching_authorization(action: DispatchAction) -> None:
     req = request(action=action)
     assert InMemoryDispatchCoordinator().dispatch(req, now=NOW).status is DispatchStatus.REJECTED
-    assert InMemoryDispatchCoordinator(approval=True).dispatch(req, now=NOW).status is DispatchStatus.ACCEPTED
+    assert InMemoryDispatchCoordinator(approval=True).dispatch(req, now=NOW).status is DispatchStatus.REJECTED
     assert InMemoryDispatchCoordinator(approval="proposal").dispatch(req, now=NOW).status is DispatchStatus.REJECTED
-    assert InMemoryDispatchCoordinator(approval=action.value).dispatch(req, now=NOW).status is DispatchStatus.ACCEPTED
+    assert InMemoryDispatchCoordinator(approval=action.value).dispatch(req, now=NOW).status is DispatchStatus.REJECTED
+    token = ApprovalToken(
+        scope=ApprovalScope(action.value),
+        plan_hash=HASH,
+        actor="reviewer/alice",
+        review_digest=HASH,
+        content_digest=HASH,
+        approved_at=NOW,
+        expires_at=NOW + timedelta(hours=1),
+    )
+    assert InMemoryDispatchCoordinator(approval=token).dispatch(req, now=NOW).status is DispatchStatus.ACCEPTED
+
+
+@pytest.mark.parametrize("approval", [True, "push", "create_pr"])
+def test_publish_rejects_approval_without_complete_consent_token(approval: object) -> None:
+    action = DispatchAction.PUSH if approval != "create_pr" else DispatchAction.CREATE_PR
+    receipt = InMemoryDispatchCoordinator(approval=approval).dispatch(
+        request(action=action), now=NOW
+    )
+    assert receipt.status is DispatchStatus.REJECTED
+    assert "complete approval token" in receipt.reason
 
 
 def test_merge_main_is_always_rejected_and_proposal_is_queueable() -> None:
