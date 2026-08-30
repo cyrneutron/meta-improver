@@ -164,6 +164,17 @@ def test_repeatability_requires_matching_run_count_and_bounded_variance() -> Non
         evaluate_self_evolve(wrong_count)
 
 
+def test_any_baseline_run_regression_is_rejected_even_when_mean_improves() -> None:
+    value = plan(
+        repeat_runs=2,
+        baseline_eval=snapshot(baseline=[0.50, 0.80], holdout=[0.50, 0.50]),
+        holdout_eval=snapshot(baseline=[0.40, 1.10], holdout=[0.65, 0.65]),
+    )
+    receipt = evaluate_self_evolve(value)
+    assert receipt.status is SelfEvolveStatus.REJECTED
+    assert "baseline regression" in receipt.reason
+
+
 def test_dataset_hash_must_not_mix_baseline_and_holdout() -> None:
     with pytest.raises(SelfEvolveError, match="same dataset hash"):
         plan(holdout_eval=snapshot(dataset_hash="sha256:" + "c" * 64, baseline=[0.52], holdout=[0.65]))

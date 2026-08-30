@@ -124,6 +124,20 @@ def test_task_context_reads_minimal_canonical_package_and_redacts(tmp_path) -> N
     assert "[REDACTED]" in context.progress_entries[0].text
 
 
+def test_task_context_truncates_oversized_progress_with_deterministic_marker(tmp_path) -> None:
+    entries = "\n".join(
+        f"### 2026-08-29T00:{index:02d}:00Z\n\nprogress entry {index} " + ("x" * 1_000) + "\n"
+        for index in range(30)
+    )
+    package = _task_fixture(tmp_path, progress=f"# Progress\n\n## Entries\n\n{entries}")
+
+    context = read_task_context(tmp_path, TASK_ID)
+
+    assert context.progress_entries
+    assert any("progress entry 29" in entry.text for entry in context.progress_entries)
+    assert any("progress truncated: retained bounded head and tail windows" in entry.text for entry in context.progress_entries)
+
+
 @pytest.mark.skipif(not (PROJECT_ROOT / "harness/tasks/task_a471cddf039eafe9c2e3986b83-implement-phase-2a-local-fixture-ingestion-and-diagnostics").is_dir(), reason="local task fixture is absent")
 def test_current_mi_task_context_reads_successfully() -> None:
     context = read_task_context(PROJECT_ROOT, "task_a471cddf039eafe9c2e3986b83")

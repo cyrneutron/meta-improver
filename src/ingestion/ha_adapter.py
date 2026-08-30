@@ -79,6 +79,9 @@ class HADecision(ContractModel):
     relations: list[dict[str, Any]] = Field(default_factory=list, max_length=500)
 
 
+PROGRESS_TRUNCATION_MARKER = "<!-- progress truncated: retained bounded head and tail windows -->"
+
+
 def _canonical_file(repo_root: Path, relative: str) -> Path:
     pure = PurePosixPath(relative)
     if pure.is_absolute() or any(part in {"", ".", ".."} for part in pure.parts) or "\\" in relative:
@@ -101,12 +104,7 @@ def _canonical_file(repo_root: Path, relative: str) -> Path:
 
 
 def _read_yaml(path: Path, max_text: int) -> dict[str, Any]:
-    try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError) as exc:
-        raise HAAdapterError(f"cannot read canonical file: {path}") from exc
-    if len(text) > max_text:
-        raise HAAdapterError(f"canonical file exceeds max_text={max_text}: {path}")
+    text = _read_text(path, max_text)
     try:
         value = yaml.safe_load(text)
     except yaml.YAMLError as exc:
@@ -118,7 +116,10 @@ def _read_yaml(path: Path, max_text: int) -> dict[str, Any]:
 
 def _read_text(path: Path, max_text: int) -> str:
     try:
-        text = path.read_text(encoding="utf-8")
+        # Read one character beyond the contract bound so oversized canonical
+        # documents fail without materializing an unbounded file.
+        with path.open("r", encoding="utf-8") as stream:
+            text = stream.read(max_text + 1)
     except (OSError, UnicodeDecodeError) as exc:
         raise HAAdapterError(f"cannot read canonical file: {path}") from exc
     if len(text) > max_text:
@@ -158,8 +159,60 @@ def _read_index_frontmatter(path: Path, max_text: int) -> tuple[dict[str, Any], 
     return value, body
 
 
+def _decode_bounded_head(raw: bytes, path: Path) -> str:
+    """Decode a bounded prefix, trimming only a UTF-8 sequence at its edge."""
+    for end in range(len(raw), max(-1, len(raw) - 4), -1):
+        try:
+            return raw[:end].decode("utf-8")
+        except UnicodeDecodeError as exc:
+            if exc.start < end - 4 or exc.end != end:
+                raise HAAdapterError(f"cannot read canonical file: {path}") from exc
+    raise HAAdapterError(f"cannot read canonical file: {path}")
+
+
+def _decode_bounded_tail(raw: bytes, path: Path) -> str:
+    """Decode a bounded suffix, trimming only a UTF-8 sequence at its edge."""
+    for start in range(0, min(4, len(raw)) + 1):
+        try:
+            return raw[start:].decode("utf-8")
+        except UnicodeDecodeError as exc:
+            if exc.start != 0:
+                raise HAAdapterError(f"cannot read canonical file: {path}") from exc
+    raise HAAdapterError(f"cannot read canonical file: {path}")
+
+
+def _read_progress_text(path: Path, max_text: int) -> str:
+    """Read progress with bounded head/tail windows and a deterministic marker."""
+    # Four bytes per Unicode code point plus a small edge allowance is a fixed
+    # bound, independent of the file size.  The stat/seek/read calls are all
+    # bounded and preserve strict UTF-8/OSError failure behavior.
+    window_bytes = max(4, max_text * 4 + 4)
+    try:
+        with path.open("rb") as stream:
+            head_raw = stream.read(window_bytes)
+            stream.seek(0, 2)
+            size = stream.tell()
+            if size <= window_bytes:
+                text = _decode_bounded_head(head_raw, path)
+                if len(text) <= max_text:
+                    return text
+            stream.seek(max(0, size - window_bytes), 0)
+            tail_raw = stream.read(window_bytes)
+    except (OSError, UnicodeDecodeError) as exc:
+        raise HAAdapterError(f"cannot read canonical file: {path}") from exc
+
+    head = _decode_bounded_head(head_raw, path)[:max_text]
+    tail = _decode_bounded_tail(tail_raw, path)[-max_text:]
+    # A tail can begin in the middle of an entry.  Start it at the first
+    # complete heading so the existing strict Markdown parser remains valid.
+    heading = re.search(r"(?m)^###\s+\S.+?\s*$", tail)
+    if heading:
+        tail = tail[heading.start() :]
+    return f"{head}\n{PROGRESS_TRUNCATION_MARKER}\n{tail}\n{PROGRESS_TRUNCATION_MARKER}"
+
+
 def _read_progress(path: Path, max_text: int) -> list[HAProgressEntry]:
-    text = _read_text(path, max_text)
+    text = _read_progress_text(path, max_text)
     lines = text.splitlines()
     if not lines or lines[0].strip() != "# Progress":
         raise HAAdapterError(f"invalid progress Markdown heading: {path}")
