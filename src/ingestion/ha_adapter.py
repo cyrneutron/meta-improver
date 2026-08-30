@@ -201,13 +201,23 @@ def _read_progress_text(path: Path, max_text: int) -> str:
     except (OSError, UnicodeDecodeError) as exc:
         raise HAAdapterError(f"cannot read canonical file: {path}") from exc
 
-    head = _decode_bounded_head(head_raw, path)[:max_text]
-    tail = _decode_bounded_tail(tail_raw, path)[-max_text:]
+    # Both marker lines may land in the same entry when the tail has no
+    # complete heading, so reserve room for two markers and their separators.
+    retained_chars = max(1, max_text - (2 * len(PROGRESS_TRUNCATION_MARKER)) - 4)
+    head = _decode_bounded_head(head_raw, path)[:retained_chars]
+    tail = _decode_bounded_tail(tail_raw, path)[-retained_chars:]
     # A tail can begin in the middle of an entry.  Start it at the first
     # complete heading so the existing strict Markdown parser remains valid.
     heading = re.search(r"(?m)^###\s+\S.+?\s*$", tail)
     if heading:
         tail = tail[heading.start() :]
+    else:
+        # A single entry can be larger than the tail window.  Do not join two
+        # partial bodies into one oversized model field; retain the structural
+        # prefix through the last complete heading and the bounded tail body.
+        headings = list(re.finditer(r"(?m)^###\s+\S.+?\s*$", head))
+        if headings:
+            head = head[: headings[-1].end()]
     return f"{head}\n{PROGRESS_TRUNCATION_MARKER}\n{tail}\n{PROGRESS_TRUNCATION_MARKER}"
 
 

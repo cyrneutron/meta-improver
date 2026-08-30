@@ -138,6 +138,17 @@ def test_task_context_truncates_oversized_progress_with_deterministic_marker(tmp
     assert any("progress truncated: retained bounded head and tail windows" in entry.text for entry in context.progress_entries)
 
 
+def test_task_context_bounds_a_single_oversized_progress_entry(tmp_path) -> None:
+    progress = "# Progress\n\n## Entries\n\n### 2026-08-29T00:00:00Z\n\n" + ("x" * 50_000)
+    package = _task_fixture(tmp_path, progress=progress)
+
+    context = read_task_context(tmp_path, TASK_ID)
+
+    assert context.progress_entries
+    assert all(len(entry.text) <= 20_000 for entry in context.progress_entries)
+    assert "progress truncated: retained bounded head and tail windows" in context.progress_entries[-1].text
+
+
 @pytest.mark.skipif(not (PROJECT_ROOT / "harness/tasks/task_a471cddf039eafe9c2e3986b83-implement-phase-2a-local-fixture-ingestion-and-diagnostics").is_dir(), reason="local task fixture is absent")
 def test_current_mi_task_context_reads_successfully() -> None:
     context = read_task_context(PROJECT_ROOT, "task_a471cddf039eafe9c2e3986b83")
