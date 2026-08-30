@@ -26,6 +26,7 @@ from .github_readonly import (
     parse_ci_runs,
     parse_issues,
 )
+from .github_ingestion import ingest_github_snapshot
 from .ha_adapter import (
     HAAdapterError,
     HAContext,
@@ -71,6 +72,7 @@ __all__ = [
     "ReadonlyGitHubTransport",
     "parse_ci_runs",
     "parse_issues",
+    "ingest_github_snapshot",
     "HAAdapterError",
     "HAContext",
     "HAFact",
