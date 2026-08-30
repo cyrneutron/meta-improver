@@ -1,5 +1,6 @@
 import hashlib
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -7,9 +8,12 @@ import pytest
 from src.ingestion import (
     DiagnosticError,
     HADiagnosticReport,
+    IngestionService,
+    SignalEvent,
     build_diagnostic_summary,
     read_diagnostic_summary,
 )
+from src.storage import Ledger
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -151,6 +155,49 @@ def test_diagnostic_summary_is_deterministic_and_alias_matches(tmp_path) -> None
     assert before == after
     assert all("secret" not in json.dumps(item.model_dump()) for item in first.facts)
     assert "must-not-be-read" not in first.to_json()
+    assert first.source is None
+    assert first.event_signature is None
+    assert first.attempt_id is None
+
+
+def test_diagnostic_summary_links_signal_event_and_attempt(tmp_path) -> None:
+    _diagnostic_fixture(tmp_path)
+    observed = datetime(2026, 8, 29, tzinfo=timezone.utc)
+    event = SignalEvent(source="issue", external_id="issue-1", content="failure", observed_at=observed)
+    attempt = IngestionService(
+        Ledger(tmp_path / "history.db"),
+        base_commit="a" * 40,
+        strategy_version="strategy-v1",
+        model_version="model-v1",
+        prompt_version="prompt-v1",
+    ).ingest(event)
+
+    report = build_diagnostic_summary(tmp_path, TASK_ID, signal_event=event, attempt=attempt)
+
+    assert report.source == "issue"
+    assert report.event_signature == event.signature
+    assert report.attempt_id == attempt.attempt_id
+    assert report.attempt_status == "proposed"
+    assert report.base_commit == "a" * 40
+    assert report.strategy_version == "strategy-v1"
+    assert json.loads(report.to_json())["event_signature"] == event.signature
+
+
+def test_diagnostic_summary_rejects_mismatched_event_and_attempt(tmp_path) -> None:
+    _diagnostic_fixture(tmp_path)
+    observed = datetime(2026, 8, 29, tzinfo=timezone.utc)
+    event = SignalEvent(source="issue", external_id="issue-1", content="failure", observed_at=observed)
+    other_event = SignalEvent(source="issue", external_id="issue-2", content="failure", observed_at=observed)
+    attempt = IngestionService(
+        Ledger(tmp_path / "history.db"),
+        base_commit="a" * 40,
+        strategy_version="strategy-v1",
+        model_version="model-v1",
+        prompt_version="prompt-v1",
+    ).ingest(event)
+
+    with pytest.raises(DiagnosticError):
+        build_diagnostic_summary(tmp_path, TASK_ID, signal_event=other_event, attempt=attempt)
 
 
 @pytest.mark.parametrize(

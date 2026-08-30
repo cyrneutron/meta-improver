@@ -19,6 +19,8 @@ from src.ingestion.ha_adapter import (
     read_ha_context,
     read_task_context,
 )
+from src.ingestion.models import SignalEvent
+from src.models import Attempt
 from src.models.contracts import ContractModel, MAX_TEXT, redact
 
 
@@ -84,6 +86,12 @@ class HADiagnosticReport(ContractModel):
     facts: list[HADiagnosticFact] = Field(default_factory=list, max_length=500)
     decisions: list[HADiagnosticDecision] = Field(default_factory=list, max_length=100)
     source_refs: list[str] = Field(default_factory=list, max_length=2_000)
+    source: str | None = Field(default=None, max_length=50)
+    event_signature: str | None = Field(default=None, max_length=100)
+    attempt_id: str | None = Field(default=None, max_length=100)
+    attempt_status: str | None = Field(default=None, max_length=50)
+    base_commit: str | None = Field(default=None, max_length=64)
+    strategy_version: str | None = Field(default=None, max_length=100)
 
     def to_json(self) -> str:
         """Serialize using Pydantic's stable JSON representation."""
@@ -138,11 +146,42 @@ def _decision_summary(decision: HADecision) -> HADiagnosticDecision:
     )
 
 
+def _association_fields(
+    signal_event: SignalEvent | None,
+    attempt: Attempt | None,
+) -> dict[str, str | None]:
+    if signal_event is None and attempt is None:
+        return {
+            "source": None,
+            "event_signature": None,
+            "attempt_id": None,
+            "attempt_status": None,
+            "base_commit": None,
+            "strategy_version": None,
+        }
+    event_signature = signal_event.signature if signal_event is not None else None
+    attempt_signature = attempt.signal if attempt is not None else None
+    if event_signature is not None and attempt_signature is not None and event_signature != attempt_signature:
+        raise DiagnosticError("signal event and attempt signatures do not match")
+    signature = event_signature or attempt_signature
+    source = signal_event.source.value if signal_event is not None else attempt.input_snapshot.source
+    return {
+        "source": source,
+        "event_signature": signature,
+        "attempt_id": attempt.attempt_id if attempt is not None else None,
+        "attempt_status": attempt.status.value if attempt is not None else None,
+        "base_commit": attempt.base_commit if attempt is not None else None,
+        "strategy_version": attempt.strategy_version if attempt is not None else None,
+    }
+
+
 def build_diagnostic_summary(
     repo_root: str | Path,
     task_id: str,
     *,
     max_text: int = MAX_TEXT,
+    signal_event: SignalEvent | None = None,
+    attempt: Attempt | None = None,
 ) -> HADiagnosticReport:
     """Build a deterministic report from canonical readers without side effects."""
     try:
@@ -159,6 +198,7 @@ def build_diagnostic_summary(
         _validate_evidence_reference(reference)
     fact_summaries = [_fact_summary(fact) for fact in facts]
     decision_summaries = [_decision_summary(decision) for decision in decisions]
+    association = _association_fields(signal_event, attempt)
     source_refs = [
         "harness/harness.yaml",
         "harness/people.yaml",
@@ -187,6 +227,7 @@ def build_diagnostic_summary(
         facts=redact(fact_summaries),
         decisions=redact(decision_summaries),
         source_refs=source_refs,
+        **association,
     )
 
 
