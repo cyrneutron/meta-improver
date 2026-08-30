@@ -205,6 +205,14 @@ class HAReviewReference(_HAReferenceContract):
     def review_hash(self) -> str:
         return self.review_digest
 
+    @property
+    def content_hash(self) -> str:
+        return self.content_digest
+
+    @property
+    def packet_hash(self) -> str:
+        return self.packet_digest
+
 
 class HAConsentReference(_HAReferenceContract):
     """Hash-bound review consent tied to task, execution, and approver."""
