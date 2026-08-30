@@ -4,6 +4,7 @@ import pytest
 
 from src.proposal import (
     ApprovalScope,
+    ApprovalToken,
     ProposalAction,
     ProposalError,
     ProposalPayload,
@@ -18,6 +19,7 @@ from src.proposal import (
 
 HASH = "sha256:" + "b" * 64
 RECEIPT = "sha256:" + "c" * 64
+REVIEW = "sha256:" + "d" * 64
 NOW = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
 
@@ -79,12 +81,29 @@ def test_approval_requires_exact_scope_plan_and_valid_time_window() -> None:
     token = approve_proposal(
         plan,
         ApprovalScope.PUSH,
+        approver_identity="reviewer/alice",
+        review_digest=REVIEW,
+        plan_digest=plan.plan_hash,
+        content_digest=plan.payload.payload_hash,
         approved_at=NOW,
         expires_at=NOW + timedelta(hours=1),
     )
     assert token.token_hash is not None
+    assert token.approver_identity == "reviewer/alice"
+    assert token.review_digest == REVIEW
+    assert token.plan_digest == plan.plan_hash
+    assert token.content_digest == plan.payload.payload_hash
     assert rehydrate_approval_token(token).model_dump() == token.model_dump()
-    assert authorize_action(plan, ProposalAction.PUSH, token, now=NOW + timedelta(minutes=1))
+    assert authorize_action(
+        plan,
+        ProposalAction.PUSH,
+        token,
+        now=NOW + timedelta(minutes=1),
+        approver_identity="reviewer/alice",
+        review_digest=REVIEW,
+        plan_digest=plan.plan_hash,
+        content_digest=plan.payload.payload_hash,
+    )
 
     with pytest.raises(ProposalError, match="scope"):
         authorize_action(plan, ProposalAction.CREATE_PR, token, now=NOW)
@@ -96,6 +115,75 @@ def test_approval_requires_exact_scope_plan_and_valid_time_window() -> None:
     other = plan_proposal(ProposalPayload.model_validate(other_payload))
     with pytest.raises(ProposalError, match="different"):
         authorize_action(other, ProposalAction.PUSH, token, now=NOW)
+
+
+def test_approval_requires_complete_consent_contract() -> None:
+    plan = plan_proposal(_payload())
+    with pytest.raises(ProposalError, match="approver identity"):
+        approve_proposal(
+            plan,
+            ApprovalScope.PUSH,
+            review_digest=REVIEW,
+            content_digest=plan.payload.payload_hash,
+            expires_at=NOW + timedelta(hours=1),
+        )
+    with pytest.raises(ProposalError, match="review_digest"):
+        approve_proposal(
+            plan,
+            ApprovalScope.PUSH,
+            approver="reviewer/alice",
+            content_digest=plan.payload.payload_hash,
+            expires_at=NOW + timedelta(hours=1),
+        )
+    with pytest.raises(ProposalError, match="content_digest"):
+        approve_proposal(
+            plan,
+            ApprovalScope.PUSH,
+            approver="reviewer/alice",
+            review_digest=REVIEW,
+            expires_at=NOW + timedelta(hours=1),
+        )
+    with pytest.raises(ProposalError, match="expires_at"):
+        approve_proposal(
+            plan,
+            ApprovalScope.PUSH,
+            approver="reviewer/alice",
+            review_digest=REVIEW,
+            content_digest=plan.payload.payload_hash,
+        )
+
+
+def test_publish_authorization_rejects_consent_binding_mismatches() -> None:
+    plan = plan_proposal(_payload())
+    token = approve_proposal(
+        plan,
+        ApprovalScope.PUSH,
+        approver="reviewer/alice",
+        review_digest=REVIEW,
+        content_digest=plan.payload.payload_hash,
+        approved_at=NOW,
+        expires_at=NOW + timedelta(hours=1),
+    )
+    with pytest.raises(ProposalError, match="identity"):
+        authorize_action(plan, ProposalAction.PUSH, token, approver="reviewer/bob", now=NOW)
+    with pytest.raises(ProposalError, match="review_digest"):
+        authorize_action(plan, ProposalAction.PUSH, token, review_digest=HASH, now=NOW)
+    with pytest.raises(ProposalError, match="plan_digest"):
+        authorize_action(plan, ProposalAction.PUSH, token, plan_digest=HASH, now=NOW)
+    with pytest.raises(ProposalError, match="content_digest"):
+        authorize_action(plan, ProposalAction.PUSH, token, content_digest=HASH, now=NOW)
+
+
+def test_approval_token_fields_are_strictly_required() -> None:
+    plan = plan_proposal(_payload())
+    values = {
+        "scope": ApprovalScope.PUSH,
+        "plan_hash": plan.plan_hash,
+        "approved_at": NOW,
+        "expires_at": NOW + timedelta(hours=1),
+    }
+    with pytest.raises(Exception):
+        ApprovalToken.model_validate(values)
 
 
 def test_default_is_proposal_only_and_no_push_or_merge_occurs() -> None:

@@ -10,11 +10,11 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import ConfigDict, Field, field_validator, model_validator
+from pydantic import AliasChoices, ConfigDict, Field, field_validator, model_validator
 from pydantic import BaseModel
 
 
@@ -85,6 +85,47 @@ def _utc(value: datetime, field_name: str) -> datetime:
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError(f"{field_name} must be timezone-aware UTC")
     return value.astimezone(timezone.utc)
+
+
+def _resolve_identity_aliases(
+    *,
+    actor: str | None = None,
+    identity: str | None = None,
+    approver: str | None = None,
+    approver_identity: str | None = None,
+    approver_id: str | None = None,
+    approved_by: str | None = None,
+) -> str | None:
+    """Resolve the supported identity spellings without accepting ambiguity."""
+
+    supplied = [
+        value
+        for value in (
+            actor,
+            identity,
+            approver,
+            approver_identity,
+            approver_id,
+            approved_by,
+        )
+        if value is not None
+    ]
+    if not supplied:
+        return None
+    if len(set(supplied)) != 1:
+        raise ProposalError("approval identity aliases conflict")
+    try:
+        return _safe_identity(supplied[0], "actor")
+    except ValueError as exc:
+        raise ProposalError("approval identity was rejected") from exc
+
+
+def _validate_optional_digest(value: str | None, field_name: str) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not _HASH.fullmatch(value):
+        raise ProposalError(f"{field_name} must be a sha256 digest")
+    return value
 
 
 class ProposalError(ValueError):
@@ -189,16 +230,50 @@ class ProposalPlan(_ProposalContract):
 
 
 class ApprovalToken(_ProposalContract):
-    """An explicit, bounded authorization tied to exactly one proposal plan."""
+    """An explicit authorization tied to one plan and complete consent."""
 
     schema_: Literal["proposal-approval-token/v1"] = Field(
         default="proposal-approval-token/v1", alias="schema", serialization_alias="schema"
     )
     scope: ApprovalScope
-    plan_hash: str = Field(pattern=_HASH)
-    approved_at: datetime
-    expires_at: datetime
+    plan_hash: str = Field(
+        pattern=_HASH,
+        validation_alias=AliasChoices("plan_hash", "plan_digest", "planHash"),
+    )
+    actor: str = Field(
+        min_length=1,
+        max_length=200,
+        validation_alias=AliasChoices(
+            "actor",
+            "identity",
+            "approver",
+            "approver_identity",
+            "approver_id",
+            "approved_by",
+            "approvedBy",
+            "approverIdentity",
+        ),
+    )
+    review_digest: str = Field(
+        pattern=_HASH,
+        validation_alias=AliasChoices("review_digest", "reviewDigest"),
+    )
+    content_digest: str = Field(
+        pattern=_HASH,
+        validation_alias=AliasChoices("content_digest", "contentDigest"),
+    )
+    approved_at: datetime = Field(
+        validation_alias=AliasChoices("approved_at", "approvedAt")
+    )
+    expires_at: datetime = Field(
+        validation_alias=AliasChoices("expires_at", "expiresAt")
+    )
     token_hash: str | None = Field(default=None, pattern=_HASH)
+
+    @field_validator("actor")
+    @classmethod
+    def safe_actor(cls, value: str) -> str:
+        return _safe_identity(value, "actor")
 
     @field_validator("approved_at", "expires_at")
     @classmethod
@@ -216,6 +291,24 @@ class ApprovalToken(_ProposalContract):
             raise ValueError("token_hash does not match canonical contents")
         object.__setattr__(self, "token_hash", expected)
         return self
+
+    @property
+    def identity(self) -> str:
+        """Compatibility spelling for callers that use identity terminology."""
+
+        return self.actor
+
+    @property
+    def approver_identity(self) -> str:
+        """Canonical consent identity under the descriptive spelling."""
+
+        return self.actor
+
+    @property
+    def plan_digest(self) -> str:
+        """Compatibility spelling for the hash-bound plan identity."""
+
+        return self.plan_hash
 
 
 def rehydrate_proposal_payload(payload: ProposalPayload) -> ProposalPayload:
@@ -275,10 +368,25 @@ def approve_proposal(
     plan: ProposalPlan,
     scope: ApprovalScope | str = ApprovalScope.PROPOSAL,
     *,
+    actor: str | None = None,
+    identity: str | None = None,
+    approver: str | None = None,
+    approver_identity: str | None = None,
+    approver_id: str | None = None,
+    approved_by: str | None = None,
+    review_digest: str | None = None,
+    content_digest: str | None = None,
+    plan_digest: str | None = None,
+    plan_hash: str | None = None,
     approved_at: datetime | None = None,
     expires_at: datetime | None = None,
 ) -> ApprovalToken:
-    """Create an explicit authorization token; this performs no external action."""
+    """Create an explicit authorization token; this performs no external action.
+
+    Every token carries the approver, review, plan, and content digests.  The
+    plan and content digests are checked against the hydrated proposal before
+    the token is issued, so an approval cannot be moved to another payload.
+    """
 
     hydrated = rehydrate_proposal_plan(plan)
     try:
@@ -287,12 +395,45 @@ def approve_proposal(
         raise ProposalError("unknown approval scope") from exc
     if selected is ApprovalScope.MERGE_MAIN:
         raise ProposalError("merge_main is permanently forbidden")
+    resolved_actor = _resolve_identity_aliases(
+        actor=actor,
+        identity=identity,
+        approver=approver,
+        approver_identity=approver_identity,
+        approver_id=approver_id,
+        approved_by=approved_by,
+    )
+    if resolved_actor is None:
+        raise ProposalError("approval requires approver identity")
+    if review_digest is None:
+        raise ProposalError("approval requires review_digest")
+    review_digest = _validate_optional_digest(review_digest, "review_digest")
+    if content_digest is None:
+        raise ProposalError("approval requires content_digest")
+    content_digest = _validate_optional_digest(content_digest, "content_digest")
+    supplied_plan_digests = [value for value in (plan_digest, plan_hash) if value is not None]
+    if len(set(supplied_plan_digests)) > 1:
+        raise ProposalError("plan digest aliases conflict")
+    supplied_plan_digest = _validate_optional_digest(
+        supplied_plan_digests[0] if supplied_plan_digests else None,
+        "plan_digest",
+    )
+    expected_plan_digest = hydrated.plan_hash or ""
+    if supplied_plan_digest is not None and supplied_plan_digest != expected_plan_digest:
+        raise ProposalError("plan_digest does not match proposal plan")
+    if content_digest != hydrated.payload.payload_hash:
+        raise ProposalError("content_digest does not match proposal payload")
+    if expires_at is None:
+        raise ProposalError("approval requires expires_at")
     start = _utc(approved_at, "approved_at") if approved_at is not None else datetime.now(timezone.utc)
-    end = _utc(expires_at, "expires_at") if expires_at is not None else start + timedelta(hours=1)
+    end = _utc(expires_at, "expires_at")
     try:
         return ApprovalToken(
             scope=selected,
             plan_hash=hydrated.plan_hash or "",
+            actor=resolved_actor,
+            review_digest=review_digest,
+            content_digest=content_digest,
             approved_at=start,
             expires_at=end,
         )
@@ -306,6 +447,16 @@ def authorize_action(
     token: ApprovalToken | None = None,
     *,
     now: datetime | None = None,
+    actor: str | None = None,
+    identity: str | None = None,
+    approver: str | None = None,
+    approver_identity: str | None = None,
+    approver_id: str | None = None,
+    approved_by: str | None = None,
+    review_digest: str | None = None,
+    content_digest: str | None = None,
+    plan_digest: str | None = None,
+    plan_hash: str | None = None,
 ) -> bool:
     """Return true only for a permitted action; never execute that action."""
 
@@ -325,6 +476,35 @@ def authorize_action(
         raise ProposalError("approval scope does not match action")
     if hydrated_token.plan_hash != hydrated_plan.plan_hash:
         raise ProposalError("approval token is bound to a different proposal plan")
+    if hydrated_token.content_digest != hydrated_plan.payload.payload_hash:
+        raise ProposalError("approval content_digest does not match proposal payload")
+    resolved_actor = _resolve_identity_aliases(
+        actor=actor,
+        identity=identity,
+        approver=approver,
+        approver_identity=approver_identity,
+        approver_id=approver_id,
+        approved_by=approved_by,
+    )
+    if resolved_actor is not None and hydrated_token.actor != resolved_actor:
+        raise ProposalError("approval approver identity does not match caller")
+    if review_digest is not None:
+        expected_review_digest = _validate_optional_digest(review_digest, "review_digest")
+        if hydrated_token.review_digest != expected_review_digest:
+            raise ProposalError("approval review_digest does not match consent")
+    supplied_plan_digests = [value for value in (plan_digest, plan_hash) if value is not None]
+    if len(set(supplied_plan_digests)) > 1:
+        raise ProposalError("plan digest aliases conflict")
+    if supplied_plan_digests:
+        expected_plan_digest = _validate_optional_digest(
+            supplied_plan_digests[0], "plan_digest"
+        )
+        if hydrated_token.plan_hash != expected_plan_digest:
+            raise ProposalError("approval plan_digest does not match proposal plan")
+    if content_digest is not None:
+        expected_content_digest = _validate_optional_digest(content_digest, "content_digest")
+        if hydrated_token.content_digest != expected_content_digest:
+            raise ProposalError("approval content_digest does not match consent")
     current = _utc(now, "now") if now is not None else datetime.now(timezone.utc)
     if not (hydrated_token.approved_at <= current < hydrated_token.expires_at):
         raise ProposalError("approval token is expired or not yet valid")
