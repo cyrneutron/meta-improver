@@ -74,7 +74,7 @@ class TestStatus(StrEnum):
 
 class InputSnapshot(ContractModel):
     source: Literal["ci", "issue", "local_log", "manual"]
-    content: str = Field(min_length=1, max_length=MAX_TEXT)
+    content: str = Field(max_length=MAX_TEXT)
     content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     captured_at: datetime = Field(default_factory=utc_now)
     metadata: dict[str, Any] = Field(default_factory=dict)

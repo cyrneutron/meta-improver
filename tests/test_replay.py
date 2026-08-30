@@ -1,3 +1,4 @@
+import hashlib
 from datetime import datetime, timezone
 
 import pytest
@@ -52,7 +53,8 @@ def test_replay_normalizes_ci_issue_and_local_log_fixtures(tmp_path) -> None:
 
     assert len(attempts) == 3
     assert [attempt.input_snapshot.source for attempt in attempts] == ["ci", "issue", "local_log"]
-    assert all(attempt.status.value == "proposed" for attempt in attempts)
+    assert [attempt.status.value for attempt in attempts] == ["failed", "proposed", "proposed"]
+    assert attempts[0].failure_reason == "CI conclusion was not success"
 
 
 def test_replay_accepts_source_tagged_mappings(tmp_path) -> None:
@@ -100,6 +102,30 @@ def test_replay_redacts_fixture_secrets_before_persistence(tmp_path) -> None:
     assert "topsecret" not in attempt.input_snapshot.content
     assert "abc123" not in attempt.input_snapshot.content
     assert "[REDACTED]" in attempt.input_snapshot.content
+
+
+def test_replay_preserves_empty_fixture_content_without_placeholders(tmp_path) -> None:
+    values = [
+        CIRunSignal(
+            run_id="run-empty",
+            workflow="ci",
+            status="completed",
+            conclusion="timed_out",
+            commit_sha=BASE_COMMIT,
+            output="",
+            observed_at=OBSERVED,
+        ),
+        IssueSignal(issue_id="issue-empty", title="No body", body="", observed_at=OBSERVED),
+        LocalLogSignal(log_id="log-empty", path="logs/empty.log", level="error", content="", observed_at=OBSERVED),
+    ]
+    ledger = Ledger(tmp_path / "history.db")
+
+    attempts = replay_fixture_signals(values, ledger, base_commit=BASE_COMMIT)
+
+    assert [attempt.input_snapshot.content for attempt in attempts] == ["", "No body", ""]
+    assert attempts[0].status.value == "failed"
+    assert attempts[0].input_snapshot.content_sha256 == hashlib.sha256(b"").hexdigest()
+    assert ledger.count() == 3
 
 
 @pytest.mark.parametrize(

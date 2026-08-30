@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import hashlib
 
-from src.ingestion.models import SignalEvent
-from src.models import Attempt, InputSnapshot
+from src.ingestion.models import SignalEvent, SignalSource
+from src.models import Attempt, AttemptStatus, InputSnapshot
 from src.storage import Ledger
 
 
@@ -33,6 +33,7 @@ class IngestionService:
             raise ValueError("normalized signal must have a signature")
         idempotency_key = ":".join((event.signature, self.base_commit, self.strategy_version))
         attempt_id = "attempt-" + hashlib.sha256(idempotency_key.encode("ascii")).hexdigest()
+        ci_failed = event.source is SignalSource.CI and event.metadata.get("outcome") == "failure"
         attempt = Attempt(
             attempt_id=attempt_id,
             idempotency_key=idempotency_key,
@@ -46,6 +47,8 @@ class IngestionService:
                 captured_at=event.observed_at,
                 metadata={"external_id": event.external_id, **event.metadata},
             ),
+            status=AttemptStatus.FAILED if ci_failed else AttemptStatus.PROPOSED,
+            failure_reason="CI conclusion was not success" if ci_failed else None,
             model_version=self.model_version,
             prompt_version=self.prompt_version,
             created_at=event.observed_at,

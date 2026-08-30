@@ -24,7 +24,7 @@ class SignalEvent(ContractModel):
 
     source: SignalSource
     external_id: str = Field(min_length=1, max_length=200)
-    content: str = Field(min_length=1, max_length=MAX_TEXT)
+    content: str = Field(max_length=MAX_TEXT)
     metadata: dict[str, Any] = Field(default_factory=dict)
     observed_at: datetime = Field(default_factory=utc_now)
     signature: str | None = Field(default=None, pattern=r"^sha256:[0-9a-f]{64}$")
@@ -56,9 +56,9 @@ class CIRunSignal(ContractModel):
     run_id: str = Field(min_length=1, max_length=200)
     workflow: str = Field(min_length=1, max_length=200)
     status: Literal["queued", "in_progress", "completed"]
-    conclusion: Literal["success", "failure", "cancelled", "skipped", ""] = ""
+    conclusion: str = Field(default="", max_length=100)
     commit_sha: str = Field(pattern=r"^[0-9a-f]{7,64}$")
-    output: str = Field(min_length=1, max_length=MAX_TEXT)
+    output: str = Field(max_length=MAX_TEXT)
     observed_at: datetime = Field(default_factory=utc_now)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -71,7 +71,7 @@ class CIRunSignal(ContractModel):
 class IssueSignal(ContractModel):
     issue_id: str = Field(min_length=1, max_length=200)
     title: str = Field(min_length=1, max_length=500)
-    body: str = Field(min_length=1, max_length=MAX_TEXT)
+    body: str = Field(max_length=MAX_TEXT)
     state: Literal["open", "closed"] = "open"
     observed_at: datetime = Field(default_factory=utc_now)
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -86,7 +86,7 @@ class LocalLogSignal(ContractModel):
     log_id: str = Field(min_length=1, max_length=200)
     path: str = Field(min_length=1, max_length=500)
     level: Literal["debug", "info", "warning", "error"]
-    content: str = Field(min_length=1, max_length=MAX_TEXT)
+    content: str = Field(max_length=MAX_TEXT)
     observed_at: datetime = Field(default_factory=utc_now)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -104,6 +104,7 @@ class LocalLogSignal(ContractModel):
 
 
 def normalize_ci_run(value: CIRunSignal) -> SignalEvent:
+    outcome = "success" if value.conclusion == "success" else "failure"
     return SignalEvent(
         source=SignalSource.CI,
         external_id=value.run_id,
@@ -114,16 +115,18 @@ def normalize_ci_run(value: CIRunSignal) -> SignalEvent:
             "workflow": value.workflow,
             "status": value.status,
             "conclusion": value.conclusion,
+            "outcome": outcome,
             "commit_sha": value.commit_sha,
         },
     )
 
 
 def normalize_issue(value: IssueSignal) -> SignalEvent:
+    content = value.title if not value.body else f"{value.title}\n\n{value.body}"
     return SignalEvent(
         source=SignalSource.ISSUE,
         external_id=value.issue_id,
-        content=f"{value.title}\n\n{value.body}",
+        content=content,
         observed_at=value.observed_at,
         metadata={**value.metadata, "state": value.state, "title": value.title},
     )

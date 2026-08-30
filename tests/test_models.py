@@ -62,6 +62,12 @@ def test_redacts_secret_metadata_and_bounds_text() -> None:
         InputSnapshot(source="manual", content="x", content_sha256="0" * 64)
 
 
+def test_input_snapshot_accepts_empty_content_with_matching_hash() -> None:
+    value = InputSnapshot(source="manual", content="", content_sha256=hashlib.sha256(b"").hexdigest())
+
+    assert value.content == ""
+
+
 def test_failed_attempt_requires_reason() -> None:
     with pytest.raises(ValidationError):
         attempt(status=AttemptStatus.FAILED)

@@ -1,3 +1,4 @@
+import hashlib
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
@@ -41,6 +42,59 @@ def test_ci_issue_and_log_normalize_to_stable_signals() -> None:
     assert {ci.source.value, issue.source.value, log.source.value} == {"ci", "issue", "local_log"}
     assert ci.signature == normalize_ci_run(ci_input).signature
     assert ci.signature.startswith("sha256:")
+
+
+@pytest.mark.parametrize("conclusion", ["failure", "cancelled", "skipped", "timed_out", ""])
+def test_ci_non_success_conclusions_map_to_internal_failure(conclusion: str, tmp_path) -> None:
+    signal = CIRunSignal(
+        run_id=f"run-{conclusion or 'empty'}",
+        workflow="CI",
+        status="completed",
+        conclusion=conclusion,
+        commit_sha=BASE,
+        output="",
+        observed_at=OBSERVED,
+    )
+    event = normalize_ci_run(signal)
+    attempt = _service(tmp_path).ingest(event)
+
+    assert event.content == ""
+    assert event.metadata["conclusion"] == conclusion
+    assert event.metadata["outcome"] == "failure"
+    assert attempt.status.value == "failed"
+    assert attempt.failure_reason == "CI conclusion was not success"
+    assert attempt.input_snapshot.content_sha256 == hashlib.sha256(b"").hexdigest()
+
+
+def test_ci_success_conclusion_is_preserved_without_failure_mapping(tmp_path) -> None:
+    signal = CIRunSignal(
+        run_id="run-success",
+        workflow="CI",
+        status="completed",
+        conclusion="success",
+        commit_sha=BASE,
+        output="",
+        observed_at=OBSERVED,
+    )
+    event = normalize_ci_run(signal)
+    replay = normalize_ci_run(signal)
+    attempt = _service(tmp_path).ingest(event)
+
+    assert event.signature == replay.signature
+    assert event.metadata["conclusion"] == "success"
+    assert event.metadata["outcome"] == "success"
+    assert attempt.status.value == "proposed"
+    assert attempt.failure_reason is None
+
+
+def test_empty_issue_body_and_local_log_content_are_not_fabricated() -> None:
+    issue = normalize_issue(IssueSignal(issue_id="issue-empty", title="Title", body="", observed_at=OBSERVED))
+    log = normalize_local_log(
+        LocalLogSignal(log_id="log-empty", path="logs/empty.log", level="info", content="", observed_at=OBSERVED)
+    )
+
+    assert issue.content == "Title"
+    assert log.content == ""
 
 
 def test_input_is_bounded_and_secrets_are_redacted() -> None:
