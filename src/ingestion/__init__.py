@@ -1,6 +1,10 @@
 """Phase 2A normalized signal input contracts."""
 
 from .service import IngestionService
+from .replay import (
+    FixtureSignal,
+    replay_fixture_signals,
+)
 from .models import (
     CIRunSignal,
     IssueSignal,
@@ -36,6 +40,8 @@ from .diagnostics import (
 )
 __all__ = [
     "IngestionService",
+    "FixtureSignal",
+    "replay_fixture_signals",
     "CIRunSignal",
     "IssueSignal",
     "LocalLogSignal",
