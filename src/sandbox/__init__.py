@@ -51,6 +51,18 @@ from .patch import (
     plan_patch_retry,
     validate_patch,
 )
+from .admission import (
+    SandboxAdmissionError,
+    SandboxAdmissionGate,
+    SandboxAdmissionPlan,
+    SandboxAdmissionReceipt,
+    SandboxAdmissionStatus,
+    admit,
+    admit_sandbox,
+    plan_admission,
+    plan_sandbox_admission,
+    rehydrate_sandbox_admission_plan,
+)
 
 __all__ = [
     "BoundedArgv",
@@ -100,4 +112,14 @@ __all__ = [
     "plan_patch",
     "plan_patch_retry",
     "validate_patch",
+    "SandboxAdmissionError",
+    "SandboxAdmissionGate",
+    "SandboxAdmissionPlan",
+    "SandboxAdmissionReceipt",
+    "SandboxAdmissionStatus",
+    "admit",
+    "admit_sandbox",
+    "plan_admission",
+    "plan_sandbox_admission",
+    "rehydrate_sandbox_admission_plan",
 ]
