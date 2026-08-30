@@ -11,8 +11,11 @@ from src.ingestion import (
     IngestionService,
     SignalEvent,
     build_diagnostic_summary,
+    build_ledger_diagnostic_summary,
+    replay_fixture_signals,
     read_diagnostic_summary,
 )
+from src.ingestion.models import IssueSignal
 from src.storage import Ledger
 
 
@@ -198,6 +201,47 @@ def test_diagnostic_summary_rejects_mismatched_event_and_attempt(tmp_path) -> No
 
     with pytest.raises(DiagnosticError):
         build_diagnostic_summary(tmp_path, TASK_ID, signal_event=other_event, attempt=attempt)
+
+
+def test_ledger_diagnostic_summary_rejects_missing_attempt(tmp_path) -> None:
+    _diagnostic_fixture(tmp_path)
+
+    with pytest.raises(DiagnosticError):
+        build_ledger_diagnostic_summary(tmp_path, TASK_ID, Ledger(tmp_path / "history.db"), "missing-attempt")
+
+
+def test_ledger_diagnostic_summary_rejects_signature_conflict(tmp_path) -> None:
+    _diagnostic_fixture(tmp_path)
+    observed = datetime(2026, 8, 29, tzinfo=timezone.utc)
+    event = SignalEvent(source="issue", external_id="issue-1", content="failure", observed_at=observed)
+    other_event = SignalEvent(source="issue", external_id="issue-2", content="failure", observed_at=observed)
+    ledger = Ledger(tmp_path / "history.db")
+    attempt = IngestionService(
+        ledger,
+        base_commit="a" * 40,
+        strategy_version="strategy-v1",
+        model_version="model-v1",
+        prompt_version="prompt-v1",
+    ).ingest(event)
+
+    with pytest.raises(DiagnosticError):
+        build_ledger_diagnostic_summary(tmp_path, TASK_ID, ledger, attempt.attempt_id, signal_event=other_event)
+
+
+def test_ledger_diagnostic_summary_is_stable_across_repeated_fixture_replay(tmp_path) -> None:
+    _diagnostic_fixture(tmp_path)
+    observed = datetime(2026, 8, 29, tzinfo=timezone.utc)
+    signal = IssueSignal(issue_id="issue-replay", title="Failure", body="Details", observed_at=observed)
+    ledger = Ledger(tmp_path / "history.db")
+    first_attempt = replay_fixture_signals([signal], ledger, base_commit="a" * 40)[0]
+    replay_attempt = replay_fixture_signals([signal], ledger, base_commit="a" * 40)[0]
+
+    first = build_ledger_diagnostic_summary(tmp_path, TASK_ID, ledger, first_attempt.attempt_id)
+    replay = build_ledger_diagnostic_summary(tmp_path, TASK_ID, ledger, replay_attempt.attempt_id)
+
+    assert replay_attempt == first_attempt
+    assert first.model_dump(mode="json") == replay.model_dump(mode="json")
+    assert first.to_json() == replay.to_json()
 
 
 @pytest.mark.parametrize(

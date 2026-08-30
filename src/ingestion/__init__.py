@@ -36,6 +36,7 @@ from .diagnostics import (
     HADiagnosticReport,
     HADiagnosticTask,
     build_diagnostic_summary,
+    build_ledger_diagnostic_summary,
     read_diagnostic_summary,
 )
 __all__ = [
@@ -68,5 +69,6 @@ __all__ = [
     "HADiagnosticReport",
     "HADiagnosticTask",
     "build_diagnostic_summary",
+    "build_ledger_diagnostic_summary",
     "read_diagnostic_summary",
 ]

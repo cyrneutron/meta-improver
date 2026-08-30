@@ -22,6 +22,7 @@ from src.ingestion.ha_adapter import (
 from src.ingestion.models import SignalEvent
 from src.models import Attempt
 from src.models.contracts import ContractModel, MAX_TEXT, redact
+from src.storage import Ledger
 
 
 class DiagnosticError(HAAdapterError):
@@ -231,6 +232,31 @@ def build_diagnostic_summary(
     )
 
 
+def build_ledger_diagnostic_summary(
+    repo_root: str | Path,
+    task_id: str,
+    ledger: Ledger,
+    attempt_id: str,
+    *,
+    max_text: int = MAX_TEXT,
+    signal_event: SignalEvent | None = None,
+) -> HADiagnosticReport:
+    """Build a diagnostic report from one read-only ledger Attempt lookup."""
+    try:
+        attempt = ledger.get_attempt(attempt_id)
+    except Exception as exc:
+        raise DiagnosticError(f"ledger attempt is unavailable: {exc}") from exc
+    if attempt is None:
+        raise DiagnosticError(f"ledger attempt not found: {attempt_id}")
+    return build_diagnostic_summary(
+        repo_root,
+        task_id,
+        max_text=max_text,
+        signal_event=signal_event,
+        attempt=attempt,
+    )
+
+
 read_diagnostic_summary = build_diagnostic_summary
 
 
@@ -242,5 +268,6 @@ __all__ = [
     "HADiagnosticReport",
     "HADiagnosticTask",
     "build_diagnostic_summary",
+    "build_ledger_diagnostic_summary",
     "read_diagnostic_summary",
 ]
