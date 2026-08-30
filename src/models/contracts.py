@@ -6,7 +6,7 @@ import hashlib
 import re
 from datetime import datetime, timezone
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -46,6 +46,19 @@ def redact(value: Any) -> Any:
 
 class ContractModel(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    # Subclasses may opt security-critical fields into pre-redaction rejection.
+    # Ordinary external text keeps the existing redaction behavior.
+    security_fields: ClassVar[tuple[str, ...]] = ()
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_security_redaction(cls, data: Any) -> Any:
+        if not cls.security_fields or not isinstance(data, dict):
+            return data
+        for field_name in cls.security_fields:
+            if field_name in data and redact(data[field_name]) != data[field_name]:
+                raise ValueError(f"{field_name} cannot be silently redacted")
+        return data
 
     @model_validator(mode="after")
     def redact_external_strings(self) -> ContractModel:

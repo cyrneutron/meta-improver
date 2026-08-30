@@ -75,9 +75,26 @@ class BoundedArgv(ContractModel):
 class WorktreeRequest(ContractModel):
     """The immutable source and bounded path scope for a future worktree."""
 
+    security_fields = (
+        "base_commit",
+        "path_allowlist",
+        "repository_id",
+        "source_root",
+        "worktree_path",
+        "request_id",
+        "concurrency_id",
+    )
+
     base_commit: str = Field(pattern=_BASE_COMMIT_PATTERN)
     path_allowlist: list[str] = Field(min_length=1, max_length=_MAX_ALLOWLIST_COUNT)
     max_files: int = Field(ge=1, le=_MAX_FILES)
+    # These fields are optional here to preserve the Phase 3A contract.  The
+    # Phase 3B planner requires them before it can produce an operation plan.
+    repository_id: str | None = Field(default=None, max_length=200)
+    source_root: str | None = Field(default=None, max_length=4_096)
+    worktree_path: str | None = Field(default=None, max_length=4_096)
+    request_id: str | None = Field(default=None, max_length=200)
+    concurrency_id: str | None = Field(default=None, max_length=200)
 
     @field_validator("path_allowlist")
     @classmethod
@@ -85,7 +102,42 @@ class WorktreeRequest(ContractModel):
         normalized = [_validate_relative_path(value, field_name="path allowlist entry") for value in values]
         if len(set(normalized)) != len(normalized):
             raise ValueError("path allowlist must not contain duplicates")
-        return normalized
+        return sorted(normalized)
+
+    @field_validator("repository_id", "request_id", "concurrency_id")
+    @classmethod
+    def safe_optional_identity(cls, value: str | None, info) -> str | None:
+        if value is None:
+            return None
+        _validate_token(value, field_name=info.field_name)
+        if any(character.isspace() for character in value):
+            raise ValueError(f"{info.field_name} must be one identity token")
+        if info.field_name != "repository_id" and "/" in value:
+            raise ValueError(f"{info.field_name} must be one identity token")
+        if info.field_name == "repository_id":
+            segments = value.split("/")
+            if any(segment in {"", ".", ".."} for segment in segments):
+                raise ValueError(f"{info.field_name} contains an unsafe segment")
+        return value
+
+    @field_validator("source_root", "worktree_path")
+    @classmethod
+    def safe_optional_absolute_path(cls, value: str | None, info) -> str | None:
+        if value is None:
+            return None
+        _validate_token(value, field_name=info.field_name)
+        if not value.startswith("/") or value == "/":
+            raise ValueError(f"{info.field_name} must be a non-root absolute path")
+        parts = value.split("/")[1:]
+        if any(part in {"", ".", ".."} for part in parts):
+            raise ValueError(f"{info.field_name} contains an unsafe path segment")
+        return value
+
+    @model_validator(mode="after")
+    def identity_aliases_match(self) -> WorktreeRequest:
+        if self.request_id and self.concurrency_id and self.request_id != self.concurrency_id:
+            raise ValueError("request_id and concurrency_id must identify the same worktree request")
+        return self
 
 
 class ContainerPolicy(ContractModel):
