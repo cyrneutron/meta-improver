@@ -9,13 +9,16 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import re
 import subprocess
 from collections.abc import Mapping, Sequence
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
+from enum import StrEnum
 from typing import Any, Literal, Protocol, TypeAlias
 
-from pydantic import Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from src.ingestion.models import CIRunSignal, IssueSignal
 from src.models.contracts import MAX_TEXT
@@ -32,6 +35,136 @@ _READ_ENDPOINT_PATTERN = re.compile(
 
 class GitHubAdapterError(ValueError):
     """Raised when a transport boundary or GitHub fixture is invalid."""
+
+
+class GitHubRateLimitKind(StrEnum):
+    """Rate-limit classes that callers may handle without inspecting text."""
+
+    PRIMARY = "primary"
+    SECONDARY = "secondary"
+
+
+class GitHubRateLimit(BaseModel):
+    """Pure, bounded retry advice derived from a GitHub response contract."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    schema_: Literal["github-rate-limit/v1"] = Field(
+        default="github-rate-limit/v1", alias="schema", serialization_alias="schema"
+    )
+    kind: GitHubRateLimitKind
+    status_code: int = Field(ge=400, le=599)
+    retry_after_seconds: float | None = Field(default=None, ge=0, le=86_400)
+    reset_at: datetime | None = None
+    backoff_seconds: float = Field(ge=0, le=86_400)
+    retry_at: datetime
+
+    @model_validator(mode="after")
+    def validate_times(self) -> GitHubRateLimit:
+        if self.retry_at.tzinfo is None or self.retry_at.utcoffset() is None:
+            raise ValueError("retry_at must be timezone-aware")
+        if self.reset_at is not None and (self.reset_at.tzinfo is None or self.reset_at.utcoffset() is None):
+            raise ValueError("reset_at must be timezone-aware")
+        return self
+
+
+def _header(headers: Mapping[str, Any], name: str) -> str | None:
+    wanted = name.casefold()
+    for key, value in headers.items():
+        if str(key).casefold() == wanted and isinstance(value, (str, int, float)):
+            return str(value).strip()
+    return None
+
+
+def _retry_after(value: str | None, now: datetime) -> float | None:
+    if value is None:
+        return None
+    try:
+        seconds = float(value)
+        if math.isfinite(seconds) and seconds >= 0:
+            return seconds
+    except ValueError:
+        pass
+    try:
+        parsed = parsedate_to_datetime(value)
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            return None
+        return max(0.0, (parsed.astimezone(timezone.utc) - now).total_seconds())
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _reset_at(value: str | None) -> datetime | None:
+    if value is None:
+        return None
+    try:
+        timestamp = float(value)
+        if timestamp < 0:
+            return None
+        return datetime.fromtimestamp(timestamp, tz=timezone.utc)
+    except (TypeError, ValueError, OverflowError, OSError):
+        return None
+
+
+def classify_github_rate_limit(
+    status_code: int,
+    *,
+    headers: Mapping[str, Any] | None = None,
+    body: str | Mapping[str, Any] | None = None,
+    now: datetime | None = None,
+    max_backoff_seconds: float = 300.0,
+    default_backoff_seconds: float = 1.0,
+) -> GitHubRateLimit | None:
+    """Classify GitHub 429/403 limits and return bounded retry advice.
+
+    ``Retry-After`` takes precedence over ``X-RateLimit-Reset``.  GitHub's
+    429 responses are secondary limits; 403 is a primary limit only when the
+    remaining quota is explicitly zero.
+    """
+
+    if not isinstance(status_code, int) or isinstance(status_code, bool):
+        raise ValueError("status_code must be an integer")
+    if max_backoff_seconds <= 0 or max_backoff_seconds > 86_400:
+        raise ValueError("max_backoff_seconds must be between 0 and 86400")
+    if default_backoff_seconds < 0 or default_backoff_seconds > max_backoff_seconds:
+        raise ValueError("default_backoff_seconds is out of bounds")
+    current = datetime.now(timezone.utc) if now is None else now
+    if current.tzinfo is None or current.utcoffset() is None:
+        raise ValueError("now must be timezone-aware")
+    current = current.astimezone(timezone.utc)
+    normalized_headers = headers or {}
+    message = ""
+    if isinstance(body, str):
+        message = body.casefold()
+    elif isinstance(body, Mapping) and isinstance(body.get("message"), str):
+        message = body["message"].casefold()
+    retry_header = _header(normalized_headers, "retry-after")
+    remaining = _header(normalized_headers, "x-ratelimit-remaining")
+    is_primary = status_code == 403 and remaining == "0"
+    is_secondary = not is_primary and (status_code == 429 or (
+        status_code == 403
+        and ("secondary rate limit" in message or "abuse detection" in message or retry_header is not None)
+    ))
+    if not is_primary and not is_secondary:
+        return None
+    kind = GitHubRateLimitKind.PRIMARY if is_primary else GitHubRateLimitKind.SECONDARY
+    retry_after = _retry_after(retry_header, current)
+    reset_at = _reset_at(_header(normalized_headers, "x-ratelimit-reset"))
+    reset_delay = None if reset_at is None else max(0.0, (reset_at - current).total_seconds())
+    requested_delay = retry_after if retry_after is not None else reset_delay
+    delay = default_backoff_seconds if requested_delay is None else requested_delay
+    delay = min(max_backoff_seconds, max(0.0, delay))
+    return GitHubRateLimit(
+        kind=kind,
+        status_code=status_code,
+        retry_after_seconds=retry_after,
+        reset_at=reset_at,
+        backoff_seconds=delay,
+        retry_at=current + timedelta(seconds=delay),
+    )
+
+
+classify_rate_limit = classify_github_rate_limit
 
 
 class ReadonlyGitHubTransport(Protocol):
@@ -314,10 +447,14 @@ __all__ = [
     "GitHubAdapterError",
     "GitHubCIRunSignal",
     "GitHubIssueSignal",
+    "GitHubRateLimit",
+    "GitHubRateLimitKind",
     "GitHubReadOnlyAdapter",
     "GhApiTransport",
     "JSON",
     "ReadonlyGitHubTransport",
     "parse_ci_runs",
     "parse_issues",
+    "classify_github_rate_limit",
+    "classify_rate_limit",
 ]

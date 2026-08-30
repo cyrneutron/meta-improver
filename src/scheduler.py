@@ -11,8 +11,10 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import sqlite3
 from datetime import datetime, timedelta, timezone
 from enum import StrEnum
+from pathlib import Path
 from threading import RLock
 from typing import Any, Literal
 
@@ -74,6 +76,10 @@ def _safe_identity(value: str, field_name: str) -> str:
 
 class SchedulerError(ValueError):
     """Raised when a dispatch contract cannot be safely used."""
+
+
+class SchedulerPersistenceError(SchedulerError):
+    """Raised when the durable dispatch journal cannot be trusted."""
 
 
 class _SchedulerContract(BaseModel):
@@ -277,6 +283,9 @@ class InMemoryDispatchCoordinator:
         self._locks: dict[str, str] = {}
         self._lock = RLock()
 
+    def _persist_state(self) -> None:
+        """Hook for durable coordinators; the in-memory implementation is a no-op."""
+
     @staticmethod
     def _now(value: datetime | None) -> datetime:
         return _utc(value, "now") if value is not None else datetime.now(timezone.utc)
@@ -389,6 +398,7 @@ class InMemoryDispatchCoordinator:
                     self._records_by_idempotency[request.idempotency_key] = retried
                     self._records_by_event[request.event_id] = retried
                     self._locks[request.idempotency_key] = request.request_hash or ""
+                    self._persist_state()
                     return _copy_receipt(retried)
                 return _copy_receipt(self._receipt(request, DispatchStatus.DEDUPLICATED, failure_count=existing.state.failure_count, reason="request was already recorded"))
             event_existing = self._records_by_event.get(request.event_id)
@@ -415,6 +425,7 @@ class InMemoryDispatchCoordinator:
             self._records_by_idempotency[request.idempotency_key] = accepted
             self._records_by_event[request.event_id] = accepted
             self._locks[request.idempotency_key] = request.request_hash or ""
+            self._persist_state()
             return _copy_receipt(accepted)
 
     submit = dispatch
@@ -426,6 +437,7 @@ class InMemoryDispatchCoordinator:
             if request.idempotency_key in self._locks:
                 return _copy_receipt(self._receipt(request, DispatchStatus.LOCKED, reason="dispatch key is already locked"))
             self._locks[request.idempotency_key] = request.request_hash or ""
+            self._persist_state()
             return _copy_receipt(self._receipt(request, DispatchStatus.ACCEPTED, reason="dispatch key locked"))
 
     lock = acquire_lock
@@ -437,6 +449,7 @@ class InMemoryDispatchCoordinator:
             if existing is None or existing.request.request_hash != request.request_hash:
                 return _copy_receipt(self._receipt(request, DispatchStatus.REJECTED, reason="dispatch request is not active"))
             self._locks.pop(request.idempotency_key, None)
+            self._persist_state()
             return _copy_receipt(self._receipt(request, DispatchStatus.DEDUPLICATED, failure_count=existing.state.failure_count, reason="dispatch already completed"))
 
     succeed = complete
@@ -471,6 +484,7 @@ class InMemoryDispatchCoordinator:
             self._records_by_idempotency[request.idempotency_key] = updated
             self._records_by_event[request.event_id] = updated
             self._locks.pop(request.idempotency_key, None)
+            self._persist_state()
             return _copy_receipt(updated)
 
     fail = record_failure
@@ -487,7 +501,190 @@ class InMemoryDispatchCoordinator:
             reset = self._receipt(request, DispatchStatus.ACCEPTED, reason="circuit reset requires a fresh dispatch")
             self._records_by_idempotency[request.idempotency_key] = reset
             self._records_by_event[request.event_id] = reset
+            self._persist_state()
             return _copy_receipt(reset)
+
+
+class SQLiteDispatchCoordinator(InMemoryDispatchCoordinator):
+    """A local, append-only SQLite journal around the dispatch coordinator.
+
+    The journal stores only validated receipts and lock identities.  It never
+    stores approval tokens, proposal bodies, or transport data.  Each row is a
+    complete snapshot, which makes replay deterministic and lets a damaged
+    row fail closed rather than silently losing admission state.
+    """
+
+    JOURNAL_SCHEMA = "dispatch-journal/v1"
+
+    def __init__(
+        self,
+        path: str | Path | None = None,
+        *,
+        journal_path: str | Path | None = None,
+        state_path: str | Path | None = None,
+        **kwargs: Any,
+    ) -> None:
+        candidates = [value for value in (path, journal_path, state_path) if value is not None]
+        if not candidates or any(Path(value) != Path(candidates[0]) for value in candidates[1:]):
+            raise ValueError("exactly one journal path is required")
+        self.path = Path(candidates[0])
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        super().__init__(**kwargs)
+        try:
+            self._migrate_journal()
+            self._load_journal()
+        except SchedulerPersistenceError:
+            raise
+        except (OSError, sqlite3.Error, TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise SchedulerPersistenceError("dispatch journal could not be opened") from exc
+
+    def _connect_journal(self) -> sqlite3.Connection:
+        db = sqlite3.connect(self.path, timeout=30, isolation_level=None)
+        db.row_factory = sqlite3.Row
+        db.execute("PRAGMA busy_timeout = 30000")
+        return db
+
+    def _migrate_journal(self) -> None:
+        with self._connect_journal() as db:
+            db.execute("BEGIN IMMEDIATE")
+            db.execute("CREATE TABLE IF NOT EXISTS dispatch_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+            row = db.execute("SELECT value FROM dispatch_meta WHERE key = 'version'").fetchone()
+            version = int(row[0]) if row else 0
+            if version > 1:
+                raise SchedulerPersistenceError(f"dispatch journal schema {version} is newer than supported 1")
+            db.execute(
+                """CREATE TABLE IF NOT EXISTS dispatch_journal (
+                    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                    snapshot_json TEXT NOT NULL,
+                    snapshot_hash TEXT NOT NULL
+                )"""
+            )
+            db.execute("INSERT OR REPLACE INTO dispatch_meta(key, value) VALUES ('version', '1')")
+            db.execute("COMMIT")
+
+    def _snapshot(self) -> dict[str, Any]:
+        records = [
+            receipt.model_dump(mode="json", by_alias=True)
+            for receipt in sorted(self._records_by_idempotency.values(), key=lambda item: item.request.idempotency_key)
+        ]
+        locks = [
+            {"idempotency_key": key, "request_hash": request_hash}
+            for key, request_hash in sorted(self._locks.items())
+        ]
+        return {
+            "schema": self.JOURNAL_SCHEMA,
+            "config": {
+                "failure_threshold": self.failure_threshold,
+                "base_backoff_seconds": self.base_backoff_seconds,
+                "max_backoff_seconds": self.max_backoff_seconds,
+            },
+            "records": records,
+            "locks": locks,
+        }
+
+    def _persist_state(self) -> None:
+        snapshot_json = _canonical(self._snapshot())
+        snapshot_hash = _digest(json.loads(snapshot_json))
+        with self._connect_journal() as db:
+            try:
+                db.execute("BEGIN IMMEDIATE")
+                db.execute(
+                    "INSERT INTO dispatch_journal(snapshot_json, snapshot_hash) VALUES (?, ?)",
+                    (snapshot_json, snapshot_hash),
+                )
+                db.execute("COMMIT")
+            except sqlite3.Error:
+                db.execute("ROLLBACK")
+                raise
+
+    @staticmethod
+    def _config(value: Any) -> tuple[int, float, float]:
+        if not isinstance(value, dict):
+            raise SchedulerPersistenceError("dispatch journal config is invalid")
+        try:
+            threshold = int(value["failure_threshold"])
+            base = float(value["base_backoff_seconds"])
+            maximum = float(value["max_backoff_seconds"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise SchedulerPersistenceError("dispatch journal config is invalid") from exc
+        if threshold < 1 or threshold > 1_000 or base <= 0 or maximum <= 0 or base > maximum:
+            raise SchedulerPersistenceError("dispatch journal config is out of bounds")
+        return threshold, base, maximum
+
+    def _apply_snapshot(self, snapshot: Any) -> None:
+        if not isinstance(snapshot, dict) or snapshot.get("schema") != self.JOURNAL_SCHEMA:
+            raise SchedulerPersistenceError("dispatch journal snapshot schema is invalid")
+        threshold, base, maximum = self._config(snapshot.get("config"))
+        raw_records = snapshot.get("records")
+        raw_locks = snapshot.get("locks")
+        if not isinstance(raw_records, list) or not isinstance(raw_locks, list):
+            raise SchedulerPersistenceError("dispatch journal snapshot collections are invalid")
+        records_by_idempotency: dict[str, DispatchReceipt] = {}
+        records_by_event: dict[str, DispatchReceipt] = {}
+        for raw in raw_records:
+            try:
+                receipt = rehydrate_dispatch_receipt(DispatchReceipt.model_validate(raw))
+            except Exception as exc:
+                raise SchedulerPersistenceError("dispatch journal contains an invalid receipt") from exc
+            key = receipt.request.idempotency_key
+            event = receipt.request.event_id
+            if key in records_by_idempotency or event in records_by_event:
+                raise SchedulerPersistenceError("dispatch journal contains duplicate identities")
+            records_by_idempotency[key] = receipt
+            records_by_event[event] = receipt
+        locks: dict[str, str] = {}
+        for raw in raw_locks:
+            if not isinstance(raw, dict) or not isinstance(raw.get("idempotency_key"), str) or not isinstance(raw.get("request_hash"), str):
+                raise SchedulerPersistenceError("dispatch journal contains an invalid lock")
+            key = raw["idempotency_key"]
+            try:
+                _safe_identity(key, "idempotency_key")
+            except ValueError as exc:
+                raise SchedulerPersistenceError("dispatch journal contains an unsafe lock") from exc
+            if not _HASH.fullmatch(raw["request_hash"]):
+                raise SchedulerPersistenceError("dispatch journal contains an invalid lock hash")
+            if key in locks:
+                raise SchedulerPersistenceError("dispatch journal contains duplicate locks")
+            recorded = records_by_idempotency.get(key)
+            if recorded is not None and recorded.request.request_hash != raw["request_hash"]:
+                raise SchedulerPersistenceError("dispatch journal lock is not bound to its receipt")
+            locks[key] = raw["request_hash"]
+        self.failure_threshold = threshold
+        self.base_backoff_seconds = base
+        self.max_backoff_seconds = maximum
+        self._records_by_idempotency = records_by_idempotency
+        self._records_by_event = records_by_event
+        self._locks = locks
+
+    def _load_journal(self) -> None:
+        with self._connect_journal() as db:
+            rows = db.execute(
+                "SELECT sequence, snapshot_json, snapshot_hash FROM dispatch_journal ORDER BY sequence"
+            ).fetchall()
+        for row in rows:
+            try:
+                snapshot = json.loads(row["snapshot_json"])
+                if not isinstance(snapshot, dict) or _canonical(snapshot) != row["snapshot_json"]:
+                    raise ValueError("snapshot is not canonical")
+                if _digest(snapshot) != row["snapshot_hash"]:
+                    raise ValueError("snapshot hash mismatch")
+                self._apply_snapshot(snapshot)
+            except SchedulerPersistenceError:
+                raise
+            except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                raise SchedulerPersistenceError(
+                    f"dispatch journal row {row['sequence']} failed integrity validation"
+                ) from exc
+
+    @property
+    def journal_entries(self) -> int:
+        """Return the number of durable snapshots, for diagnostics and tests."""
+        with self._connect_journal() as db:
+            return int(db.execute("SELECT COUNT(*) FROM dispatch_journal").fetchone()[0])
+
+
+# The descriptive name is convenient for callers while retaining one implementation.
+PersistentDispatchCoordinator = SQLiteDispatchCoordinator
 
 
 plan_dispatch = DispatchRequest
@@ -501,7 +698,10 @@ __all__ = [
     "DispatchState",
     "DispatchStatus",
     "InMemoryDispatchCoordinator",
+    "PersistentDispatchCoordinator",
     "SchedulerError",
+    "SchedulerPersistenceError",
+    "SQLiteDispatchCoordinator",
     "plan_dispatch",
     "rehydrate_dispatch_receipt",
     "rehydrate_dispatch_request",
