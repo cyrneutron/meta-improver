@@ -14,6 +14,13 @@ from src.ingestion.github_readonly import (
     parse_issues,
 )
 from src.ingestion.models import CIRunSignal, IssueSignal
+from src.ingestion import (
+    FixtureTransport as ExportedFixtureTransport,
+    GitHubReadOnlyAdapter as ExportedGitHubReadOnlyAdapter,
+    GhApiTransport as ExportedGhApiTransport,
+    parse_ci_runs as exported_parse_ci_runs,
+    parse_issues as exported_parse_issues,
+)
 
 
 OWNER = "example-org"
@@ -81,6 +88,25 @@ def test_empty_output_and_body_are_valid_and_raw_conclusion_is_retained() -> Non
     assert run.conclusion == "timed_out"
     assert run.metadata["raw_conclusion"] == "timed_out"
     assert issue.body == ""
+
+
+@pytest.mark.parametrize("status", ["waiting", "requested", "pending"])
+def test_common_github_run_statuses_are_preserved_in_metadata(status: str) -> None:
+    payload = _run(output=None)
+    payload["status"] = status
+
+    run = parse_ci_runs({"workflow_runs": [payload]})[0]
+
+    assert run.status == status
+    assert run.metadata["raw_status"] == status
+
+
+def test_unknown_github_run_status_fails_closed() -> None:
+    payload = _run(output=None)
+    payload["status"] = "future_status"
+
+    with pytest.raises(GitHubAdapterError):
+        parse_ci_runs({"workflow_runs": [payload]})
 
 
 def test_missing_conclusion_is_distinct_from_empty_output() -> None:
@@ -171,3 +197,11 @@ def test_repository_path_components_are_bounded() -> None:
 def test_malformed_fixture_response_fails_closed() -> None:
     with pytest.raises(GitHubAdapterError):
         parse_ci_runs({"workflow_runs": ["bad"]})
+
+
+def test_adapter_api_is_exported_from_ingestion_package() -> None:
+    assert ExportedFixtureTransport is FixtureTransport
+    assert ExportedGitHubReadOnlyAdapter is GitHubReadOnlyAdapter
+    assert ExportedGhApiTransport is GhApiTransport
+    assert exported_parse_ci_runs is parse_ci_runs
+    assert exported_parse_issues is parse_issues

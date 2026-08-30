@@ -13,7 +13,7 @@ import re
 import subprocess
 from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import Any, Protocol, TypeAlias
+from typing import Any, Literal, Protocol, TypeAlias
 
 from pydantic import Field, ValidationError
 
@@ -42,12 +42,13 @@ class ReadonlyGitHubTransport(Protocol):
 
 
 class GitHubCIRunSignal(CIRunSignal):
-    """GitHub CI signal with optional output and unbounded conclusion values."""
+    """GitHub CI signal with optional output and GitHub's run statuses."""
 
     # The Actions runs list normally has no output.  Keep the empty value until
     # an explicit log source is joined by a later ingestion step.
     output: str = Field(default="", max_length=MAX_TEXT)
     conclusion: str = Field(default="", max_length=100)
+    status: Literal["queued", "in_progress", "completed", "waiting", "requested", "pending"]
 
 
 class GitHubIssueSignal(IssueSignal):
@@ -220,12 +221,13 @@ def _map_ci_run(payload: Mapping[str, Any]) -> GitHubCIRunSignal:
     raw_conclusion = payload.get("conclusion")
     if raw_conclusion is not None and not isinstance(raw_conclusion, str):
         raise GitHubAdapterError("GitHub run conclusion must be a string or null")
+    raw_status = _required_string(payload, "status")
     return _build(
         GitHubCIRunSignal,
         {
             "run_id": _identifier(payload, "id", "run_id"),
             "workflow": _required_string(payload, "name", "workflow_name"),
-            "status": _required_string(payload, "status"),
+            "status": raw_status,
             "conclusion": raw_conclusion or "",
             "commit_sha": _commit_sha(payload),
             "output": _optional_string(payload, "output"),
@@ -235,6 +237,7 @@ def _map_ci_run(payload: Mapping[str, Any]) -> GitHubCIRunSignal:
             "metadata": {
                 "raw_conclusion": raw_conclusion,
                 "github_conclusion": raw_conclusion,
+                "raw_status": raw_status,
                 "run_url": payload.get("html_url"),
             },
         },

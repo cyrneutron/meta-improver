@@ -15,6 +15,17 @@ from .models import (
     normalize_issue,
     normalize_local_log,
 )
+from .github_readonly import (
+    FixtureTransport,
+    GitHubAdapterError,
+    GitHubCIRunSignal,
+    GitHubIssueSignal,
+    GitHubReadOnlyAdapter,
+    GhApiTransport,
+    ReadonlyGitHubTransport,
+    parse_ci_runs,
+    parse_issues,
+)
 from .ha_adapter import (
     HAAdapterError,
     HAContext,
@@ -51,6 +62,15 @@ __all__ = [
     "normalize_ci_run",
     "normalize_issue",
     "normalize_local_log",
+    "FixtureTransport",
+    "GitHubAdapterError",
+    "GitHubCIRunSignal",
+    "GitHubIssueSignal",
+    "GitHubReadOnlyAdapter",
+    "GhApiTransport",
+    "ReadonlyGitHubTransport",
+    "parse_ci_runs",
+    "parse_issues",
     "HAAdapterError",
     "HAContext",
     "HAFact",
