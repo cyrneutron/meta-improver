@@ -210,6 +210,14 @@ def test_ledger_diagnostic_summary_rejects_missing_attempt(tmp_path) -> None:
         build_ledger_diagnostic_summary(tmp_path, TASK_ID, Ledger(tmp_path / "history.db"), "missing-attempt")
 
 
+@pytest.mark.parametrize("attempt_id", ["", "a" * 101, None])
+def test_ledger_diagnostic_summary_rejects_invalid_attempt_id(tmp_path, attempt_id) -> None:
+    _diagnostic_fixture(tmp_path)
+
+    with pytest.raises(DiagnosticError):
+        build_ledger_diagnostic_summary(tmp_path, TASK_ID, Ledger(tmp_path / "history.db"), attempt_id)
+
+
 def test_ledger_diagnostic_summary_rejects_signature_conflict(tmp_path) -> None:
     _diagnostic_fixture(tmp_path)
     observed = datetime(2026, 8, 29, tzinfo=timezone.utc)
@@ -242,6 +250,11 @@ def test_ledger_diagnostic_summary_is_stable_across_repeated_fixture_replay(tmp_
     assert replay_attempt == first_attempt
     assert first.model_dump(mode="json") == replay.model_dump(mode="json")
     assert first.to_json() == replay.to_json()
+    assert first.source == "issue"
+    assert first.event_signature == first_attempt.signal
+    assert first.attempt_id == first_attempt.attempt_id
+    assert first.attempt_status == "proposed"
+    assert first.base_commit == "a" * 40
 
 
 @pytest.mark.parametrize(

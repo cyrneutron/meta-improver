@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 from typing import Any
 
@@ -242,9 +243,11 @@ def build_ledger_diagnostic_summary(
     signal_event: SignalEvent | None = None,
 ) -> HADiagnosticReport:
     """Build a diagnostic report from one read-only ledger Attempt lookup."""
+    if not isinstance(attempt_id, str) or not attempt_id.strip() or len(attempt_id) > 100:
+        raise DiagnosticError("ledger attempt id must be a non-empty string of at most 100 characters")
     try:
         attempt = ledger.get_attempt(attempt_id)
-    except Exception as exc:
+    except (sqlite3.Error, TypeError, ValueError) as exc:
         raise DiagnosticError(f"ledger attempt is unavailable: {exc}") from exc
     if attempt is None:
         raise DiagnosticError(f"ledger attempt not found: {attempt_id}")
