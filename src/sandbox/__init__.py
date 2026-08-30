@@ -63,6 +63,20 @@ from .admission import (
     plan_sandbox_admission,
     rehydrate_sandbox_admission_plan,
 )
+from .orchestration import (
+    FakeSandboxOrchestrator,
+    OrchestrationError,
+    OrchestrationStatus,
+    SandboxOrchestrationPlan,
+    SandboxOrchestrationReceipt,
+    SandboxOrchestrationStatus,
+    complete_sandbox_orchestration,
+    orchestrate_sandbox,
+    plan_orchestration,
+    plan_sandbox_orchestration,
+    rehydrate_sandbox_orchestration_plan,
+    rehydrate_sandbox_orchestration_receipt,
+)
 
 __all__ = [
     "BoundedArgv",
@@ -122,4 +136,16 @@ __all__ = [
     "plan_admission",
     "plan_sandbox_admission",
     "rehydrate_sandbox_admission_plan",
+    "FakeSandboxOrchestrator",
+    "OrchestrationError",
+    "OrchestrationStatus",
+    "SandboxOrchestrationPlan",
+    "SandboxOrchestrationReceipt",
+    "SandboxOrchestrationStatus",
+    "complete_sandbox_orchestration",
+    "orchestrate_sandbox",
+    "plan_orchestration",
+    "plan_sandbox_orchestration",
+    "rehydrate_sandbox_orchestration_plan",
+    "rehydrate_sandbox_orchestration_receipt",
 ]
