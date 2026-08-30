@@ -60,6 +60,31 @@ def plan(**overrides: object):
     return plan_self_evolve(**values)
 
 
+def strict_snapshot(
+    candidate_value: PromptCandidate,
+    *,
+    split: str = "baseline",
+    manifest: str = HASH,
+    evaluator_version: str = "evaluator-v1",
+    **overrides: object,
+) -> EvalSnapshot:
+    values: dict[str, object] = {
+        "dataset_manifest": manifest,
+        "split": split,
+        "candidate": candidate_value,
+        "prompt_version": candidate_value.prompt_version,
+        "rules_version": candidate_value.rules_version,
+        "evaluator_version": evaluator_version,
+        "parent_commit": candidate_value.parent_commit,
+        "rollback_ref": candidate_value.rollback_ref,
+        "baseline_scores": [0.50],
+        "holdout_scores": [0.50],
+        "cost_units": 1.0,
+    }
+    values.update(overrides)
+    return EvalSnapshot(**values)
+
+
 def test_acceptance_is_deterministic_and_replayable() -> None:
     first = plan()
     second = plan()
@@ -80,6 +105,68 @@ def test_candidate_and_snapshot_hashes_are_canonical() -> None:
     assert snapshot_value.eval_hash is not None
     assert rehydrate_prompt_candidate(value).model_dump() == value.model_dump()
     assert rehydrate_eval_snapshot(snapshot_value).model_dump() == snapshot_value.model_dump()
+
+
+def test_strict_snapshot_binds_manifest_split_and_candidate_identity() -> None:
+    value = strict_snapshot(candidate(), split="holdout")
+    assert value.dataset_manifest == HASH
+    assert value.dataset_hash == HASH
+    assert value.candidate_hash == candidate().candidate_hash
+    assert value.eval_hash is not None
+    assert rehydrate_eval_snapshot(value).model_dump() == value.model_dump()
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "dataset_manifest",
+        "split",
+        "candidate_hash",
+        "prompt_version",
+        "rules_version",
+        "evaluator_version",
+        "parent_commit",
+        "rollback_ref",
+    ],
+)
+def test_strict_snapshot_missing_identity_fails_closed(field: str) -> None:
+    payload = strict_snapshot(candidate()).model_dump(mode="json", by_alias=True)
+    payload.pop(field)
+    with pytest.raises(ValidationError):
+        EvalSnapshot.model_validate(payload)
+
+
+def test_strict_snapshot_rejects_oversized_identity_and_tampering() -> None:
+    base = strict_snapshot(candidate()).model_dump(mode="json", by_alias=True)
+    with pytest.raises(ValidationError):
+        EvalSnapshot.model_validate({**base, "prompt_version": "p" * 129})
+    with pytest.raises(ValidationError):
+        EvalSnapshot.model_validate({**base, "rollback_ref": "r" * 257})
+    with pytest.raises(ValidationError):
+        EvalSnapshot.model_validate({**base, "evaluator_version": "e" * 129})
+
+    value = strict_snapshot(candidate())
+    object.__setattr__(value, "parent_commit", "c" * 40)
+    with pytest.raises(SelfEvolveError, match="EvalSnapshot"):
+        rehydrate_eval_snapshot(value)
+
+
+def test_plan_rejects_mismatched_strict_snapshot_bindings() -> None:
+    first = candidate()
+    second = candidate(prompt_version="prompt-v3")
+    with pytest.raises(SelfEvolveError, match="candidate"):
+        plan_self_evolve(
+            first,
+            strict_snapshot(first, split="baseline"),
+            strict_snapshot(second, split="holdout"),
+        )
+
+    with pytest.raises(SelfEvolveError, match="same dataset"):
+        plan_self_evolve(
+            first,
+            strict_snapshot(first, split="baseline"),
+            strict_snapshot(first, split="holdout", manifest="sha256:" + "c" * 64),
+        )
 
 
 @pytest.mark.parametrize(

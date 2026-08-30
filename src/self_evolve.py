@@ -12,11 +12,12 @@ import hashlib
 import json
 import math
 import re
+from collections.abc import Mapping
 from enum import StrEnum
 from statistics import mean, pvariance
 from typing import Any, Literal, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 _HASH = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -37,6 +38,13 @@ MAX_METRICS = 100
 MAX_SCORE = 1_000_000_000.0
 # A fixed protocol bound makes repeatability deterministic and auditable.
 MAX_GAIN_VARIANCE = 0.01
+
+_LEGACY_CANDIDATE_HASH = "sha256:" + "0" * 64
+_LEGACY_PROMPT_VERSION = "legacy-prompt-v1"
+_LEGACY_RULES_VERSION = "legacy-rules-v1"
+_LEGACY_EVALUATOR_VERSION = "legacy-evaluator-v1"
+_LEGACY_PARENT_COMMIT = "0" * 40
+_LEGACY_ROLLBACK_REF = "refs/heads/self-evolve-rollback"
 
 
 def _canonical(value: Any) -> str:
@@ -143,21 +151,103 @@ class PromptCandidate(_SelfEvolveContract):
 
 
 class EvalSnapshot(_SelfEvolveContract):
-    """One captured run set over one immutable baseline/holdout dataset pair.
+    """One captured, hash-bound run set over an immutable dataset manifest.
 
     ``baseline_scores`` and ``holdout_scores`` are repeated scores from the
     reference and holdout split respectively.  A mapping is useful for named
-    metrics; a list is useful for a single aggregate metric.
+    metrics; a list is useful for a single aggregate metric.  New snapshots
+    must identify the split and the exact L1 candidate/evaluator identity.
+    The old ``dataset_hash=...`` constructor remains accepted and is upgraded
+    to that identity by :func:`plan_self_evolve`.
     """
 
     schema_: Literal["self-evolve-eval-snapshot/v1"] = Field(
         default="self-evolve-eval-snapshot/v1", alias="schema", serialization_alias="schema"
     )
-    dataset_hash: str = Field(pattern=_HASH)
+    dataset_manifest: str = Field(
+        pattern=_HASH,
+        min_length=71,
+        max_length=71,
+        validation_alias=AliasChoices(
+            "dataset_manifest", "dataset_manifest_hash", "dataset_hash"
+        ),
+    )
+    split: Literal["baseline", "holdout", "both"] = "both"
+    candidate_hash: str | None = Field(
+        default=None,
+        pattern=_HASH,
+        validation_alias=AliasChoices("candidate_hash", "candidate"),
+    )
+    prompt_version: str | None = Field(default=None, min_length=1, max_length=128)
+    rules_version: str | None = Field(default=None, min_length=1, max_length=128)
+    evaluator_version: str | None = Field(default=None, min_length=1, max_length=128)
+    parent_commit: str | None = Field(default=None, pattern=_COMMIT, min_length=7, max_length=64)
+    rollback_ref: str | None = Field(default=None, min_length=1, max_length=256)
     baseline_scores: ScoreVector = Field(min_length=1, max_length=MAX_SCORES)
     holdout_scores: ScoreVector = Field(min_length=1, max_length=MAX_SCORES)
     cost_units: float = Field(ge=0, le=1_000_000, allow_inf_nan=False)
     eval_hash: str | None = Field(default=None, pattern=_HASH)
+
+    @model_validator(mode="before")
+    @classmethod
+    def support_legacy_constructor(cls, value: Any) -> Any:
+        """Fill only the historical ``dataset_hash`` shape.
+
+        Modern manifest payloads do not receive defaults, so omitted identity
+        fields fail closed instead of silently becoming an unbound snapshot.
+        """
+
+        if not isinstance(value, Mapping):
+            return value
+        modern_manifest = any(
+            key in value for key in ("dataset_manifest", "dataset_manifest_hash")
+        )
+        if "dataset_hash" not in value or modern_manifest:
+            return value
+        upgraded = dict(value)
+        upgraded.setdefault("dataset_manifest", upgraded["dataset_hash"])
+        upgraded.pop("dataset_hash", None)
+        upgraded.setdefault("candidate_hash", _LEGACY_CANDIDATE_HASH)
+        upgraded.setdefault("prompt_version", _LEGACY_PROMPT_VERSION)
+        upgraded.setdefault("rules_version", _LEGACY_RULES_VERSION)
+        upgraded.setdefault("evaluator_version", _LEGACY_EVALUATOR_VERSION)
+        upgraded.setdefault("parent_commit", _LEGACY_PARENT_COMMIT)
+        upgraded.setdefault("rollback_ref", _LEGACY_ROLLBACK_REF)
+        upgraded.setdefault("split", "both")
+        return upgraded
+
+    @property
+    def dataset_hash(self) -> str:
+        """Historical attribute spelling for callers of the original API."""
+
+        return self.dataset_manifest
+
+    @property
+    def dataset_manifest_hash(self) -> str:
+        return self.dataset_manifest
+
+    @property
+    def candidate(self) -> str:
+        """Historical-friendly spelling for the candidate digest binding."""
+
+        return self.candidate_hash or ""
+
+    @field_validator("prompt_version", "rules_version", "evaluator_version")
+    @classmethod
+    def safe_snapshot_versions(cls, value: str | None, info: Any) -> str | None:
+        return None if value is None else _safe_version(value, info.field_name)
+
+    @field_validator("rollback_ref")
+    @classmethod
+    def safe_snapshot_rollback_ref(cls, value: str | None) -> str | None:
+        return None if value is None else _safe_ref(value)
+
+    @field_validator("candidate_hash", mode="before")
+    @classmethod
+    def candidate_digest(cls, value: Any) -> Any:
+        if isinstance(value, PromptCandidate):
+            return value.candidate_hash
+        return value
 
     @field_validator("baseline_scores", "holdout_scores")
     @classmethod
@@ -179,6 +269,26 @@ class EvalSnapshot(_SelfEvolveContract):
 
     @model_validator(mode="after")
     def derive_hash(self) -> EvalSnapshot:
+        metadata = (
+            self.candidate_hash,
+            self.prompt_version,
+            self.rules_version,
+            self.evaluator_version,
+            self.parent_commit,
+            self.rollback_ref,
+        )
+        legacy = metadata == (
+            _LEGACY_CANDIDATE_HASH,
+            _LEGACY_PROMPT_VERSION,
+            _LEGACY_RULES_VERSION,
+            _LEGACY_EVALUATOR_VERSION,
+            _LEGACY_PARENT_COMMIT,
+            _LEGACY_ROLLBACK_REF,
+        ) and self.split == "both"
+        if any(item is None for item in metadata):
+            raise ValueError("EvalSnapshot identity fields are required")
+        if not legacy and self.split == "both":
+            raise ValueError("EvalSnapshot split must be baseline or holdout")
         expected = _digest(self.model_dump(mode="json", by_alias=True, exclude={"eval_hash"}))
         if self.eval_hash is not None and self.eval_hash != expected:
             raise ValueError("eval_hash does not match canonical contents")
@@ -202,8 +312,26 @@ class SelfEvolvePlan(_SelfEvolveContract):
 
     @model_validator(mode="after")
     def validate_dataset_binding_and_hash(self) -> SelfEvolvePlan:
-        if self.baseline_eval.dataset_hash != self.holdout_eval.dataset_hash:
-            raise ValueError("baseline and holdout evaluations must use the same dataset hash")
+        if self.baseline_eval.dataset_manifest != self.holdout_eval.dataset_manifest:
+            raise ValueError("baseline and holdout evaluations must use the same dataset hash/manifest")
+        identity_fields = (
+            "candidate_hash",
+            "prompt_version",
+            "rules_version",
+            "evaluator_version",
+            "parent_commit",
+            "rollback_ref",
+        )
+        for field_name in identity_fields:
+            if getattr(self.baseline_eval, field_name) != getattr(self.holdout_eval, field_name):
+                raise ValueError(f"baseline and holdout evaluations must share {field_name}")
+            candidate_value = getattr(self.candidate, field_name, None)
+            if candidate_value is not None and getattr(self.baseline_eval, field_name) != candidate_value:
+                raise ValueError(f"evaluation {field_name} does not match candidate")
+        if self.baseline_eval.split == "baseline" and self.holdout_eval.split != "holdout":
+            raise ValueError("holdout evaluation must use the holdout split")
+        if self.holdout_eval.split == "holdout" and self.baseline_eval.split != "baseline":
+            raise ValueError("baseline evaluation must use the baseline split")
         expected = _digest(self.model_dump(mode="json", by_alias=True, exclude={"plan_hash"}))
         if self.plan_hash is not None and self.plan_hash != expected:
             raise ValueError("plan_hash does not match canonical contents")
@@ -287,6 +415,63 @@ def rehydrate_self_evolve_receipt(value: SelfEvolveReceipt) -> SelfEvolveReceipt
     return _rehydrate(value, SelfEvolveReceipt, "receipt_hash")
 
 
+def _is_legacy_snapshot(value: EvalSnapshot) -> bool:
+    return (
+        value.split == "both"
+        and value.candidate_hash == _LEGACY_CANDIDATE_HASH
+        and value.prompt_version == _LEGACY_PROMPT_VERSION
+        and value.rules_version == _LEGACY_RULES_VERSION
+        and value.evaluator_version == _LEGACY_EVALUATOR_VERSION
+        and value.parent_commit == _LEGACY_PARENT_COMMIT
+        and value.rollback_ref == _LEGACY_ROLLBACK_REF
+    )
+
+
+def _bind_snapshot(
+    value: EvalSnapshot,
+    candidate: PromptCandidate,
+    split: Literal["baseline", "holdout"],
+) -> EvalSnapshot:
+    """Bind a legacy snapshot or verify a modern snapshot's full identity."""
+
+    snapshot = rehydrate_eval_snapshot(value)
+    candidate_hash = candidate.candidate_hash
+    if candidate_hash is None:
+        raise SelfEvolveError("candidate is missing candidate_hash")
+    if _is_legacy_snapshot(snapshot):
+        payload = snapshot.model_dump(mode="json", by_alias=True)
+        payload.update(
+            {
+                "split": split,
+                "candidate_hash": candidate_hash,
+                "prompt_version": candidate.prompt_version,
+                "rules_version": candidate.rules_version,
+                "parent_commit": candidate.parent_commit,
+                "rollback_ref": candidate.rollback_ref,
+                # The first version is the only evaluator available at this
+                # boundary; it remains an explicit hash-bound identity.
+                "evaluator_version": "evaluator-v1",
+                "eval_hash": None,
+            }
+        )
+        try:
+            return rehydrate_eval_snapshot(EvalSnapshot.model_validate(payload))
+        except Exception as exc:
+            raise SelfEvolveError("legacy evaluation snapshot binding failed") from exc
+    for field_name in (
+        "candidate_hash",
+        "prompt_version",
+        "rules_version",
+        "parent_commit",
+        "rollback_ref",
+    ):
+        if getattr(snapshot, field_name) != getattr(candidate, field_name):
+            raise SelfEvolveError(f"evaluation {field_name} does not match candidate")
+    if snapshot.split != split:
+        raise SelfEvolveError(f"evaluation split must be {split}")
+    return snapshot
+
+
 def _values(scores: ScoreVector) -> list[float]:
     return list(scores) if isinstance(scores, list) else list(scores.values())
 
@@ -325,10 +510,11 @@ def plan_self_evolve(
     """Build a pure self-evolve plan after rehydrating every input."""
 
     try:
+        bound_candidate = rehydrate_prompt_candidate(candidate)
         return SelfEvolvePlan(
-            candidate=rehydrate_prompt_candidate(candidate),
-            baseline_eval=rehydrate_eval_snapshot(baseline_eval),
-            holdout_eval=rehydrate_eval_snapshot(holdout_eval),
+            candidate=bound_candidate,
+            baseline_eval=_bind_snapshot(baseline_eval, bound_candidate, "baseline"),
+            holdout_eval=_bind_snapshot(holdout_eval, bound_candidate, "holdout"),
             repeat_runs=repeat_runs,
             min_gain=min_gain,
             max_cost=max_cost,
@@ -348,8 +534,8 @@ def evaluate_self_evolve(plan: SelfEvolvePlan) -> SelfEvolveReceipt:
         candidate = rehydrate_prompt_candidate(hydrated.candidate)
         baseline = rehydrate_eval_snapshot(hydrated.baseline_eval)
         holdout = rehydrate_eval_snapshot(hydrated.holdout_eval)
-        if baseline.dataset_hash != holdout.dataset_hash:
-            raise SelfEvolveError("baseline and holdout dataset hashes do not match")
+        if baseline.dataset_manifest != holdout.dataset_manifest:
+            raise SelfEvolveError("baseline and holdout dataset hashes/manifests do not match")
         baseline_gains = _run_gains(baseline.baseline_scores, holdout.baseline_scores, hydrated.repeat_runs)
         holdout_gains = _run_gains(baseline.holdout_scores, holdout.holdout_scores, hydrated.repeat_runs)
         baseline_gain = mean(baseline_gains)
