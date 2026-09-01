@@ -4,6 +4,7 @@ import hashlib
 import pytest
 
 from src.models import Attempt
+from src.ha_diagnosis import HaDiagnosis, HaDiagnosisFinding, HaDiagnosisStatus
 from src.storage import Ledger, LedgerConflictError
 
 
@@ -54,3 +55,23 @@ def test_concurrent_same_key_has_one_row(tmp_path) -> None:
         results = list(pool.map(write, attempts))
     assert sum(result != "conflict" for result in results) == 1
     assert ledger.count() == 1
+
+
+def test_diagnosis_table_migrates_from_v1_and_is_idempotent(tmp_path) -> None:
+    path = tmp_path / "history.db"
+    ledger = Ledger(path)
+    diagnosis = HaDiagnosis(
+        diagnosis_id="diag-1",
+        task_id="task-1",
+        squad_id="squad-1",
+        run_id="run-1",
+        status=HaDiagnosisStatus.CONVERGED,
+        findings=[HaDiagnosisFinding(path="README.md", observation="finding")],
+        provider_version="0.1.0",
+        provider_build_id="build",
+        poll_attempts=1,
+        receipt_digest="sha256:" + "a" * 64,
+        observed_at="2026-01-01T00:00:00Z",
+    )
+    assert ledger.record_diagnosis(diagnosis) == diagnosis
+    assert ledger.get_diagnosis("diag-1") == diagnosis

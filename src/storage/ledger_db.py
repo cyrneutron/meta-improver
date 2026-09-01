@@ -8,10 +8,11 @@ import threading
 from pathlib import Path
 from typing import Iterator
 
+from src.ha_diagnosis import HaDiagnosis, rehydrate_diagnosis
 from src.models import Attempt
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 class LedgerConflictError(RuntimeError):
@@ -60,6 +61,20 @@ class Ledger:
                 )
                 db.execute("CREATE INDEX attempts_signal_idx ON attempts(signal, base_commit, strategy_version)")
                 db.execute("INSERT OR REPLACE INTO schema_meta(key, value) VALUES ('version', '1')")
+                version = 1
+            if version < 2:
+                db.execute(
+                    """CREATE TABLE IF NOT EXISTS diagnoses (
+                        diagnosis_id TEXT PRIMARY KEY,
+                        task_id TEXT NOT NULL,
+                        run_id TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        record_json TEXT NOT NULL,
+                        observed_at TEXT NOT NULL
+                    )"""
+                )
+                db.execute("CREATE INDEX IF NOT EXISTS diagnoses_task_idx ON diagnoses(task_id, observed_at)")
+                db.execute("INSERT OR REPLACE INTO schema_meta(key, value) VALUES ('version', '2')")
             db.execute("COMMIT")
 
     @staticmethod
@@ -123,3 +138,41 @@ class Ledger:
             rows = db.execute("SELECT payload_json FROM attempts ORDER BY created_at, attempt_id").fetchall()
         yield from (Attempt.model_validate_json(row[0]) for row in rows)
 
+    def record_diagnosis(self, diagnosis: HaDiagnosis) -> HaDiagnosis:
+        """Persist one hash-bound diagnosis idempotently by diagnosis_id."""
+        value = rehydrate_diagnosis(diagnosis)
+        payload = json.dumps(value.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
+        with self._lock, self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            existing = db.execute(
+                "SELECT record_json FROM diagnoses WHERE diagnosis_id = ?", (value.diagnosis_id,)
+            ).fetchone()
+            if existing:
+                if existing[0] != payload:
+                    db.execute("ROLLBACK")
+                    raise LedgerConflictError(
+                        f"diagnosis id already belongs to {value.diagnosis_id} with different data"
+                    )
+                db.execute("COMMIT")
+                return HaDiagnosis.model_validate_json(existing[0])
+            db.execute(
+                "INSERT INTO diagnoses (diagnosis_id, task_id, run_id, status, record_json, observed_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (value.diagnosis_id, value.task_id, value.run_id, value.status.value, payload, value.observed_at.isoformat()),
+            )
+            db.execute("COMMIT")
+        return value
+
+    def get_diagnosis(self, diagnosis_id: str) -> HaDiagnosis | None:
+        with self._connect() as db:
+            row = db.execute("SELECT record_json FROM diagnoses WHERE diagnosis_id = ?", (diagnosis_id,)).fetchone()
+        return HaDiagnosis.model_validate_json(row[0]) if row else None
+
+    def iter_diagnoses(self, task_id: str | None = None) -> Iterator[HaDiagnosis]:
+        with self._connect() as db:
+            if task_id is None:
+                rows = db.execute("SELECT record_json FROM diagnoses ORDER BY observed_at, diagnosis_id").fetchall()
+            else:
+                rows = db.execute(
+                    "SELECT record_json FROM diagnoses WHERE task_id = ? ORDER BY observed_at, diagnosis_id", (task_id,)
+                ).fetchall()
+        yield from (HaDiagnosis.model_validate_json(row[0]) for row in rows)
