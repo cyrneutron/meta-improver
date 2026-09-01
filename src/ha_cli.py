@@ -148,7 +148,7 @@ _ALLOWED: dict[tuple[str, ...], str] = {
     ("squad", "run"): "squad-run",
 }
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$")
-_SAFE_TASK = re.compile(r"^[^\x00\r\n]{1,2000}$")
+_SAFE_PROMPT = re.compile(r"^[^\x00\r\n]{1,2000}$")
 _TERMINAL_STATES = frozenset({
     "completed", "complete", "succeeded", "success", "failed", "failure",
     "rejected", "cancelled", "canceled", "errored", "error", "aborted",
@@ -170,8 +170,8 @@ def _repository_relative(value: str) -> bool:
     )
 
 
-def _safe_task(value: str) -> bool:
-    return isinstance(value, str) and bool(_SAFE_TASK.fullmatch(value)) and not value.startswith("-")
+def _safe_prompt(value: str) -> bool:
+    return isinstance(value, str) and bool(_SAFE_PROMPT.fullmatch(value)) and not value.startswith("-")
 
 
 def _identifier(value: object) -> bool:
@@ -231,14 +231,16 @@ class HaCliAdapter:
             # Keep this shape deliberately literal.  In particular, callers
             # cannot add provider flags or reorder the four required fields.
             if (
-                len(parts) != 9
+                len(parts) != 11
                 or not _identifier(parts[2])
                 or parts[3] != "--instance"
                 or not _identifier(parts[4])
                 or parts[5] != "--cwd"
                 or not _repository_relative(parts[6])
                 or parts[7] != "--task"
-                or not _safe_task(parts[8])
+                or not _identifier(parts[8])
+                or parts[9] != "--prompt"
+                or not _safe_prompt(parts[10])
             ):
                 route = None
         else:
@@ -276,6 +278,7 @@ class HaCliAdapter:
         squad_id: str,
         instance: str,
         cwd: str,
+        task_id: str,
         task: str,
     ) -> HaCliReceipt:
         """Submit one fixed, proposal-only squad invocation.
@@ -286,7 +289,10 @@ class HaCliAdapter:
         """
         return self.invoke(
             root,
-            ("squad", "run", squad_id, "--instance", instance, "--cwd", cwd, "--task", task),
+            (
+                "squad", "run", squad_id, "--instance", instance, "--cwd", cwd,
+                "--task", task_id, "--prompt", task,
+            ),
         )
 
     def poll_squad_status(

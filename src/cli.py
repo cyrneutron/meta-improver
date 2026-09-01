@@ -50,14 +50,15 @@ def ha_squad_run(
     squad_id: Annotated[str, typer.Option("--squad-id")],
     instance: Annotated[str, typer.Option("--instance")],
     cwd: Annotated[str, typer.Option("--cwd")],
-    task: Annotated[str, typer.Option("--task")],
+    task_id: Annotated[str, typer.Option("--task")],
+    task: Annotated[str, typer.Option("--prompt")],
     version: Annotated[str, typer.Option()] = "0.1.0",
     build_id: Annotated[str, typer.Option()] = "5fa644bc-4a6c-44a0-8a7d-f7897a1877a6",
 ) -> None:
     """Emit the receipt for one fixed, proposal-only squad request."""
     try:
         receipt = _adapter(executable, cli_entry, build_id_file, version, build_id).squad_run(
-            root, squad_id, instance, cwd, task
+            root, squad_id, instance, cwd, task_id, task
         )
     except HaCliError as exc:
         typer.echo(json.dumps({"ok": False, "error": str(exc)}, sort_keys=True))

@@ -67,11 +67,11 @@ def test_squad_run_uses_fixed_argv_and_repository_relative_cwd(tmp_path: Path) -
         {"schema": "command-receipt/v2", "ok": True, "command": "squad-run", "runId": "run-1"},
     ])
     receipt = HaCliAdapter(_config(tmp_path), transport).squad_run(
-        tmp_path, "squad-1", "instance-1", "src/work", "task-1"
+        tmp_path, "squad-1", "instance-1", "src/work", "task-1", "prompt-1"
     )
     assert receipt.status is HaCliStatus.SUCCEEDED
-    assert transport.calls[1][0][-10:] == [
-        "squad", "run", "squad-1", "--instance", "instance-1", "--cwd", "src/work", "--task", "task-1", "--json"
+    assert transport.calls[1][0][-12:] == [
+        "squad", "run", "squad-1", "--instance", "instance-1", "--cwd", "src/work", "--task", "task-1", "--prompt", "prompt-1", "--json"
     ]
     assert transport.calls[1][1]["env"] == {}
 
@@ -79,7 +79,7 @@ def test_squad_run_uses_fixed_argv_and_repository_relative_cwd(tmp_path: Path) -
 @pytest.mark.parametrize("cwd", ["/tmp/outside", "../outside", "src/../outside", "C:\\tmp\\outside"])
 def test_squad_run_rejects_non_repository_relative_cwd(tmp_path: Path, cwd: str) -> None:
     transport = FixtureTransport([{"ok": True, "command": "version", "version": "0.1.0"}])
-    receipt = HaCliAdapter(_config(tmp_path), transport).squad_run(tmp_path, "squad-1", "instance-1", cwd, "task-1")
+    receipt = HaCliAdapter(_config(tmp_path), transport).squad_run(tmp_path, "squad-1", "instance-1", cwd, "task-1", "prompt-1")
     assert receipt.status is HaCliStatus.UNSUPPORTED
     assert len(transport.calls) == 1
 
@@ -88,7 +88,7 @@ def test_squad_run_rejects_arbitrary_flags(tmp_path: Path) -> None:
     transport = FixtureTransport([{"ok": True, "command": "version", "version": "0.1.0"}])
     receipt = HaCliAdapter(_config(tmp_path), transport).invoke(
         tmp_path,
-        ("squad", "run", "squad-1", "--instance", "instance-1", "--cwd", "src", "--task", "task-1", "--network"),
+        ("squad", "run", "squad-1", "--instance", "instance-1", "--cwd", "src", "--task", "task-1", "--prompt", "prompt-1", "--network"),
     )
     assert receipt.status is HaCliStatus.UNSUPPORTED
 
