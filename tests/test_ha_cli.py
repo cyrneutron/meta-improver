@@ -54,6 +54,19 @@ def test_adapter_uses_argv_empty_environment_and_validates_receipt(tmp_path: Pat
     assert transport.calls[1][1]["timeout_seconds"] == 30
 
 
+def test_adapter_only_injects_explicit_bounded_daemon_routing(tmp_path: Path) -> None:
+    transport = FixtureTransport([
+        {"ok": True, "command": "version", "version": "0.1.0"},
+        {"schema": "command-receipt/v2", "ok": True, "command": "squad-list", "items": []},
+    ])
+    config = _config(tmp_path).model_copy(update={"daemon_user_root": tmp_path, "daemon_id": "candidate-1"})
+    HaCliAdapter(config, transport).squad_list(tmp_path)
+    assert transport.calls[1][1]["env"] == {
+        "HARNESS_DAEMON_USER_ROOT": str(tmp_path),
+        "HARNESS_DAEMON_ID": "candidate-1",
+    }
+
+
 def test_uncontracted_command_is_explicitly_unsupported_without_invocation(tmp_path: Path) -> None:
     transport = FixtureTransport([{"ok": True, "command": "version", "version": "0.1.0"}])
     receipt = HaCliAdapter(_config(tmp_path), transport).invoke(tmp_path, ("squad", "run", "x"))
@@ -108,6 +121,17 @@ def test_squad_status_poll_stops_at_terminal_state_and_returns_json_receipts(tmp
     assert receipt.attempts == 2
     assert len(receipt.receipts) == 2
     assert receipt.model_dump(by_alias=True)["schema"] == "ha-cli-status-poll-receipt/v1"
+
+
+def test_squad_status_poll_treats_converged_as_terminal(tmp_path: Path) -> None:
+    transport = FixtureTransport([
+        {"ok": True, "command": "version", "version": "0.1.0"},
+        {"schema": "command-receipt/v2", "ok": True, "status": "converged", "decision": {"kind": "converged"}},
+    ])
+    receipt = HaCliAdapter(_config(tmp_path), transport).poll_squad_status(
+        tmp_path, "run-1", interval_seconds=0, max_attempts=1, deadline_seconds=2
+    )
+    assert receipt.terminal is True
 
 
 def test_squad_status_poll_is_bounded_by_attempts(tmp_path: Path) -> None:

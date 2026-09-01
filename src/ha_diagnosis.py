@@ -16,7 +16,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from src.ha_cli import HaCliAdapter, HaCliStatus
+from src.ha_cli import HaCliAdapter, HaCliStatus, HaCliStatusPollReceipt
 
 
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$")
@@ -156,6 +156,14 @@ def _decision(payload: dict[str, Any]) -> dict[str, Any] | None:
             found = _decision(nested)
             if found:
                 return found
+    leaders = payload.get("leaders")
+    if isinstance(leaders, list):
+        for leader in reversed(leaders):
+            nested = _nested_mapping(leader)
+            if nested:
+                found = _decision(nested)
+                if found:
+                    return found
     return None
 
 
@@ -196,6 +204,27 @@ def collect_squad_diagnosis(
     poll = adapter.poll_squad_status(
         root, run_id, interval_seconds=interval_seconds, max_attempts=max_attempts, deadline_seconds=deadline_seconds
     )
+    return normalize_squad_status(
+        poll,
+        diagnosis_id=diagnosis_id,
+        squad_id=squad_id,
+        task_id=task_id,
+        run_id=run_id,
+        observed_at=started,
+    )
+
+
+def normalize_squad_status(
+    poll: HaCliStatusPollReceipt,
+    *,
+    diagnosis_id: str,
+    squad_id: str,
+    task_id: str,
+    run_id: str,
+    observed_at: datetime | None = None,
+) -> HaDiagnosis:
+    """Normalize a previously polled terminal status without rerunning it."""
+
     payload = poll.receipt or {}
     decision = _decision(payload)
     summary = decision.get("summary") if decision else None
@@ -213,7 +242,7 @@ def collect_squad_diagnosis(
         summary=summary if isinstance(summary, str) else None, findings=findings,
         provider_version=poll.provider_version, provider_build_id=poll.provider_build_id,
         poll_attempts=poll.attempts, receipt_digest=_digest(payload),
-        reason="" if converged else (poll.reason or "Squad run did not converge."), observed_at=datetime.now(timezone.utc),
+        reason="" if converged else (poll.reason or "Squad run did not converge."), observed_at=observed_at or datetime.now(timezone.utc),
     )
 
 
@@ -230,4 +259,7 @@ def rehydrate_diagnosis(value: HaDiagnosis) -> HaDiagnosis:
     return hydrated
 
 
-__all__ = ["HaDiagnosis", "HaDiagnosisError", "HaDiagnosisFinding", "HaDiagnosisStatus", "collect_squad_diagnosis", "rehydrate_diagnosis"]
+__all__ = [
+    "HaDiagnosis", "HaDiagnosisError", "HaDiagnosisFinding", "HaDiagnosisStatus",
+    "collect_squad_diagnosis", "normalize_squad_status", "rehydrate_diagnosis",
+]

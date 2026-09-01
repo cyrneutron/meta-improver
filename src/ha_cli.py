@@ -34,6 +34,8 @@ class HaCliConfig(BaseModel):
     build_id_file: Path
     expected_version: str = Field(min_length=1, max_length=100)
     expected_build_id: str = Field(min_length=1, max_length=200)
+    daemon_user_root: Path | None = None
+    daemon_id: str = Field(default="default", min_length=1, max_length=100)
     timeout_seconds: float = Field(default=30.0, gt=0, le=300)
     max_output_bytes: int = Field(default=1_048_576, ge=1, le=10_485_760)
 
@@ -152,8 +154,9 @@ _SAFE_PROMPT = re.compile(r"^[^\x00\r\n]{1,2000}$")
 _TERMINAL_STATES = frozenset({
     "completed", "complete", "succeeded", "success", "failed", "failure",
     "rejected", "cancelled", "canceled", "errored", "error", "aborted",
-    "done", "terminal",
+    "done", "terminal", "converged",
 })
+_DAEMON_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$")
 
 
 def _repository_relative(value: str) -> bool:
@@ -196,8 +199,18 @@ class HaCliAdapter:
         if not root.is_absolute() or not root.is_dir():
             raise HaCliError("HA root must be an existing absolute directory")
         argv = [str(self.config.executable), str(self.config.cli_entry), "--root", str(root), *command, "--json"]
+        env: dict[str, str] = {}
+        if self.config.daemon_user_root is not None:
+            if not self.config.daemon_user_root.is_absolute() or not self.config.daemon_user_root.is_dir():
+                raise HaCliError("configured daemon user root must be an existing absolute directory")
+            if _DAEMON_ID.fullmatch(self.config.daemon_id) is None:
+                raise HaCliError("configured daemon id is not safe")
+            env = {
+                "HARNESS_DAEMON_USER_ROOT": str(self.config.daemon_user_root),
+                "HARNESS_DAEMON_ID": self.config.daemon_id,
+            }
         result = self.transport.run(
-            argv, cwd=root, env={}, timeout_seconds=self.config.timeout_seconds,
+            argv, cwd=root, env=env, timeout_seconds=self.config.timeout_seconds,
             max_output_bytes=self.config.max_output_bytes,
         )
         try:
