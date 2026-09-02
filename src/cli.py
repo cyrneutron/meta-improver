@@ -15,6 +15,9 @@ app = typer.Typer(help="Meta-Improver proposal-only control surface.", no_args_i
 ha_app = typer.Typer(help="Inspect the pinned Harness Anything provider.", no_args_is_help=True)
 app.add_typer(ha_app, name="ha")
 
+DEFAULT_HA_CLI_VERSION = "0.0.1"
+DEFAULT_HA_CLI_BUILD_ID = "852a87e8-a6a5-4c99-9275-160a9cefb704"
+
 
 def _adapter(executable: Path, cli_entry: Path, build_id_file: Path, version: str, build_id: str) -> HaCliAdapter:
     return HaCliAdapter(HaCliConfig(
@@ -29,8 +32,8 @@ def ha_check(
     executable: Annotated[Path, typer.Option(exists=True, dir_okay=False, resolve_path=True)],
     cli_entry: Annotated[Path, typer.Option(exists=True, dir_okay=False, resolve_path=True)],
     build_id_file: Annotated[Path, typer.Option(exists=True, dir_okay=False, resolve_path=True)],
-    version: Annotated[str, typer.Option()] = "0.1.0",
-    build_id: Annotated[str, typer.Option()] = "5fa644bc-4a6c-44a0-8a7d-f7897a1877a6",
+    version: Annotated[str, typer.Option()] = DEFAULT_HA_CLI_VERSION,
+    build_id: Annotated[str, typer.Option()] = DEFAULT_HA_CLI_BUILD_ID,
 ) -> None:
     """Verify version/build identity and print capabilities as JSON."""
     try:
@@ -52,8 +55,8 @@ def ha_squad_run(
     cwd: Annotated[str, typer.Option("--cwd")],
     task_id: Annotated[str, typer.Option("--task")],
     task: Annotated[str, typer.Option("--prompt")],
-    version: Annotated[str, typer.Option()] = "0.1.0",
-    build_id: Annotated[str, typer.Option()] = "5fa644bc-4a6c-44a0-8a7d-f7897a1877a6",
+    version: Annotated[str, typer.Option()] = DEFAULT_HA_CLI_VERSION,
+    build_id: Annotated[str, typer.Option()] = DEFAULT_HA_CLI_BUILD_ID,
 ) -> None:
     """Emit the receipt for one fixed, proposal-only squad request."""
     try:
@@ -76,8 +79,8 @@ def ha_squad_status(
     interval_seconds: Annotated[float, typer.Option("--interval-seconds", min=0, max=60)] = 1.0,
     max_attempts: Annotated[int, typer.Option("--max-attempts", min=1, max=1000)] = 30,
     deadline_seconds: Annotated[float, typer.Option("--deadline-seconds", min=0.001, max=300)] = 30.0,
-    version: Annotated[str, typer.Option()] = "0.1.0",
-    build_id: Annotated[str, typer.Option()] = "5fa644bc-4a6c-44a0-8a7d-f7897a1877a6",
+    version: Annotated[str, typer.Option()] = DEFAULT_HA_CLI_VERSION,
+    build_id: Annotated[str, typer.Option()] = DEFAULT_HA_CLI_BUILD_ID,
 ) -> None:
     """Poll only squad status and emit a bounded JSON receipt."""
     try:

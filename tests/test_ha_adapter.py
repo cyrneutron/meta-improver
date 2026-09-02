@@ -268,6 +268,7 @@ def test_task_context_is_read_only_and_ignores_projection(tmp_path) -> None:
 
 FACT_ID = "F-AAAA1111"
 DECISION_ID = "dec_fixture123"
+CURRENT_HEADERLESS_DECISION_ID = "dec_D733F3C950200877B76B5A47A8"
 
 
 def _fact_fixture(root: Path, *, content: str | None = None, filename: str | None = None) -> Path:
@@ -290,11 +291,8 @@ def _fact_fixture(root: Path, *, content: str | None = None, filename: str | Non
     return path
 
 
-def _decision_fixture(root: Path, *, content: str | None = None, directory_name: str | None = None) -> Path:
-    directory = root / "harness" / "decisions" / (directory_name or f"decision-{DECISION_ID}")
-    directory.mkdir(parents=True)
-    path = directory / "decision.md"
-    content = content or f'''---
+def _decision_content(*, body: str = "# Fixture decision\n") -> str:
+    return f'''---
 schema: decision-package/v1
 decision_id: {DECISION_ID}
 title: "Fixture decision"
@@ -305,9 +303,15 @@ rejected: [{{"id": "RJ1", "text": "Use unbounded input", "whyNot": "Unsafe"}}]
 claims: [{{"id": "C1", "text": "The boundary is load-bearing", "loadBearing": true}}]
 relations: [{{"type": "evidenced-by", "target": "fact/{FACT_ID}"}}]
 ---
-
-# Fixture decision
+{body}
 '''
+
+
+def _decision_fixture(root: Path, *, content: str | None = None, directory_name: str | None = None) -> Path:
+    directory = root / "harness" / "decisions" / (directory_name or f"decision-{DECISION_ID}")
+    directory.mkdir(parents=True)
+    path = directory / "decision.md"
+    content = content or _decision_content()
     path.write_text(content, encoding="utf-8")
     return path
 
@@ -357,6 +361,81 @@ def test_decision_context_reads_structured_frontmatter_and_redacts(tmp_path) -> 
     assert records[0].chosen[0]["id"] == "CH1"
     assert records[0].relations[0]["target"] == f"fact/{FACT_ID}"
     assert path.exists()
+
+
+def test_decision_context_accepts_nonempty_prose_without_h1_or_relations(tmp_path) -> None:
+    content = _decision_content(
+        body="The chosen boundary remains in effect.\n\n## Judgment\n\nAccepted.\n"
+    ).replace(f'relations: [{{"type": "evidenced-by", "target": "fact/{FACT_ID}"}}]\n', "")
+    _decision_fixture(
+        tmp_path,
+        content=content,
+    )
+
+    records = read_decision_context(tmp_path)
+
+    assert [record.decision_id for record in records] == [DECISION_ID]
+    assert records[0].relations == []
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "Decision body without frontmatter.\n",
+        "---\nschema: [\n---\nDecision body.\n",
+        _decision_content(body="\n\n"),
+        _decision_content().replace(
+            f'relations: [{{"type": "evidenced-by", "target": "fact/{FACT_ID}"}}]',
+            "relations: invalid",
+        ),
+    ],
+)
+def test_decision_context_rejects_missing_malformed_frontmatter_and_empty_body(tmp_path, content) -> None:
+    _decision_fixture(tmp_path, content=content)
+
+    with pytest.raises(HAAdapterError):
+        read_decision_context(tmp_path)
+
+
+def test_task_context_still_requires_h1_after_frontmatter(tmp_path) -> None:
+    package = _task_fixture(tmp_path)
+    index_path = package / "INDEX.md"
+    index_path.write_text(
+        index_path.read_text(encoding="utf-8").replace("# Fixture task", "Fixture task"),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(HAAdapterError, match="invalid Markdown heading"):
+        read_task_context(tmp_path, TASK_ID)
+
+
+@pytest.mark.skipif(
+    not (
+        PROJECT_ROOT
+        / "harness/decisions"
+        / f"decision-{CURRENT_HEADERLESS_DECISION_ID}"
+        / "decision.md"
+    ).is_file(),
+    reason="current headerless canonical decision is absent",
+)
+def test_current_mi_headerless_decision_witness_reads_successfully(tmp_path) -> None:
+    source = (
+        PROJECT_ROOT
+        / "harness/decisions"
+        / f"decision-{CURRENT_HEADERLESS_DECISION_ID}"
+        / "decision.md"
+    )
+    content = source.read_text(encoding="utf-8")
+    assert "\n# " not in content
+    _decision_fixture(
+        tmp_path,
+        content=content,
+        directory_name=f"decision-{CURRENT_HEADERLESS_DECISION_ID}",
+    )
+
+    records = read_decision_context(tmp_path)
+
+    assert [record.decision_id for record in records] == [CURRENT_HEADERLESS_DECISION_ID]
 
 
 @pytest.mark.skipif(not (PROJECT_ROOT / "harness/facts").is_dir(), reason="local facts ledger is absent")

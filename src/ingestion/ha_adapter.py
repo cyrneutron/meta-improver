@@ -138,24 +138,41 @@ def _read_json(path: Path, max_text: int) -> dict[str, Any]:
     return value
 
 
-def _read_index_frontmatter(path: Path, max_text: int) -> tuple[dict[str, Any], str]:
+def _read_markdown_frontmatter(
+    path: Path,
+    max_text: int,
+    *,
+    document: str,
+) -> tuple[dict[str, Any], str]:
     text = _read_text(path, max_text)
     lines = text.splitlines()
     if not lines or lines[0].strip() != "---":
-        raise HAAdapterError(f"task INDEX has no YAML frontmatter: {path}")
+        raise HAAdapterError(f"{document} has no YAML frontmatter: {path}")
     try:
         closing = next(index for index in range(1, len(lines)) if lines[index].strip() == "---")
     except StopIteration as exc:
-        raise HAAdapterError(f"unterminated task INDEX frontmatter: {path}") from exc
+        raise HAAdapterError(f"unterminated {document} frontmatter: {path}") from exc
     try:
         value = yaml.safe_load("\n".join(lines[1:closing]))
     except yaml.YAMLError as exc:
-        raise HAAdapterError(f"invalid INDEX YAML frontmatter: {path}") from exc
+        raise HAAdapterError(f"invalid {document} YAML frontmatter: {path}") from exc
     if not isinstance(value, dict):
-        raise HAAdapterError(f"task INDEX frontmatter must be a mapping: {path}")
+        raise HAAdapterError(f"{document} frontmatter must be a mapping: {path}")
     body = "\n".join(lines[closing + 1 :])
+    return value, body
+
+
+def _read_index_frontmatter(path: Path, max_text: int) -> tuple[dict[str, Any], str]:
+    value, body = _read_markdown_frontmatter(path, max_text, document="task INDEX")
     if not re.search(r"(?m)^#\s+\S", body):
         raise HAAdapterError(f"task INDEX has invalid Markdown heading: {path}")
+    return value, body
+
+
+def _read_decision_frontmatter(path: Path, max_text: int) -> tuple[dict[str, Any], str]:
+    value, body = _read_markdown_frontmatter(path, max_text, document="decision")
+    if not body.strip():
+        raise HAAdapterError(f"decision body is empty: {path}")
     return value, body
 
 
@@ -410,7 +427,7 @@ def read_fact_context(repo_root: str | Path, *, max_text: int = MAX_TEXT) -> lis
 
 
 def _decision_record(path: Path, max_text: int) -> HADecision:
-    frontmatter, _body = _read_index_frontmatter(path, max_text)
+    frontmatter, _body = _read_decision_frontmatter(path, max_text)
     if frontmatter.get("schema") != "decision-package/v1":
         raise HAAdapterError(f"unsupported decision schema: {path}")
     decision_id = frontmatter.get("decision_id")
@@ -422,11 +439,15 @@ def _decision_record(path: Path, max_text: int) -> HADecision:
     if any(not isinstance(frontmatter.get(field), str) or not frontmatter[field].strip() for field in required_strings):
         raise HAAdapterError(f"decision fields are missing or invalid: {path}")
     fields: dict[str, list[dict[str, Any]]] = {}
-    for field in ("chosen", "rejected", "claims", "relations"):
+    for field in ("chosen", "rejected", "claims"):
         value = frontmatter.get(field)
         if not isinstance(value, list) or any(not isinstance(item, dict) for item in value):
             raise HAAdapterError(f"decision field is not a list of mappings: {path}")
         fields[field] = value
+    relations = frontmatter.get("relations", [])
+    if not isinstance(relations, list) or any(not isinstance(item, dict) for item in relations):
+        raise HAAdapterError(f"decision field is not a list of mappings: {path}")
+    fields["relations"] = relations
     try:
         return HADecision(
             decision_id=decision_id,

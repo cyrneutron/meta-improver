@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
+import src.cli as cli_module
 from src.cli import app
 from src.ha_cli import (
     HaCliAdapter,
@@ -18,6 +19,8 @@ from src.ha_cli import (
 
 
 BUILD = "build-123"
+CURRENT_VERSION = "0.0.1"
+CURRENT_BUILD_ID = "852a87e8-a6a5-4c99-9275-160a9cefb704"
 
 
 class FixtureTransport:
@@ -155,6 +158,93 @@ def test_version_and_build_drift_fail_closed(tmp_path: Path) -> None:
     config.build_id_file.write_text("different")
     with pytest.raises(HaCliError, match="build id drift"):
         HaCliAdapter(config, FixtureTransport([])).capabilities(tmp_path)
+
+    config = _config(tmp_path)
+    transport = FixtureTransport([{"ok": True, "command": "version", "version": "different"}])
+    with pytest.raises(HaCliError, match="version drift"):
+        HaCliAdapter(config, transport).capabilities(tmp_path)
+
+
+class _CliReceipt:
+    def model_dump_json(self, **_kwargs) -> str:
+        return json.dumps({"ok": True})
+
+
+class _CliAdapter:
+    def capabilities(self, _root):
+        return _CliReceipt()
+
+    def squad_run(self, *_args):
+        return _CliReceipt()
+
+    def poll_squad_status(self, *_args, **_kwargs):
+        return _CliReceipt()
+
+
+@pytest.mark.parametrize(
+    "command,args",
+    [
+        ("check", []),
+        (
+            "squad-run",
+            [
+                "--squad-id", "squad-1",
+                "--instance", "instance-1",
+                "--cwd", "src",
+                "--task", "task-1",
+                "--prompt", "diagnose",
+            ],
+        ),
+        ("squad-status", ["--run-id", "run-1"]),
+    ],
+)
+def test_cli_ha_commands_share_current_default_identity(tmp_path: Path, monkeypatch, command, args) -> None:
+    config = _config(tmp_path)
+    captured = []
+
+    def capture_adapter(executable, cli_entry, build_id_file, version, build_id):
+        captured.append((executable, cli_entry, build_id_file, version, build_id))
+        return _CliAdapter()
+
+    monkeypatch.setattr(cli_module, "_adapter", capture_adapter)
+    result = CliRunner().invoke(
+        app,
+        [
+            "ha",
+            command,
+            "--root", str(tmp_path),
+            "--executable", str(config.executable),
+            "--cli-entry", str(config.cli_entry),
+            "--build-id-file", str(config.build_id_file),
+            *args,
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert len(captured) == 1
+    assert captured[0][3:] == (CURRENT_VERSION, CURRENT_BUILD_ID)
+
+
+def test_cli_rejects_explicit_wrong_build_identity(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    result = CliRunner().invoke(
+        app,
+        [
+            "ha",
+            "check",
+            "--root", str(tmp_path),
+            "--executable", str(config.executable),
+            "--cli-entry", str(config.cli_entry),
+            "--build-id-file", str(config.build_id_file),
+            "--version", CURRENT_VERSION,
+            "--build-id", "wrong-build-id",
+        ],
+    )
+
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is False
+    assert "build id drift" in payload["error"]
 
 
 def test_cli_help_exposes_only_diagnostic_surface() -> None:
