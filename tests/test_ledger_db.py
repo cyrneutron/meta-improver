@@ -91,6 +91,8 @@ def test_schema_v2_attempt_migrates_with_initial_event(tmp_path) -> None:
         "patch_hash",
         "acceptance_receipt_hash",
         "pipeline_receipt_hash",
+        "source_diagnosis_id",
+        "source_diagnosis_hash",
     ):
         legacy.pop(field)
     payload = json.dumps(legacy, sort_keys=True, separators=(",", ":"))

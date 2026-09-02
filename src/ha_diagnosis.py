@@ -12,11 +12,12 @@ import json
 import re
 from datetime import datetime, timezone
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from src.ha_cli import HaCliAdapter, HaCliStatus, HaCliStatusPollReceipt
+from src.models import Attempt, AttemptStatus, InputSnapshot
 
 
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$")
@@ -259,7 +260,78 @@ def rehydrate_diagnosis(value: HaDiagnosis) -> HaDiagnosis:
     return hydrated
 
 
+class DiagnosisAttemptLedger(Protocol):
+    def record_diagnosis(self, diagnosis: HaDiagnosis) -> HaDiagnosis: ...
+
+    def record_attempt(self, attempt: Attempt) -> Attempt: ...
+
+    def transition_attempt(self, attempt: Attempt) -> Attempt: ...
+
+
+def record_squad_diagnosis_attempt(
+    ledger: DiagnosisAttemptLedger,
+    diagnosis: HaDiagnosis,
+    *,
+    base_commit: str,
+    strategy_version: str,
+    model_version: str,
+    prompt_version: str,
+) -> Attempt:
+    """Persist a diagnosis and create its captured, replay-safe Attempt handoff."""
+
+    recorded_diagnosis = ledger.record_diagnosis(rehydrate_diagnosis(diagnosis))
+    diagnosis_hash = recorded_diagnosis.record_hash or ""
+    key = _digest(
+        {
+            "signal": diagnosis_hash,
+            "base_commit": base_commit,
+            "strategy_version": strategy_version,
+        }
+    )
+    snapshot = InputSnapshot(
+        source="manual",
+        content=diagnosis_hash,
+        content_sha256=hashlib.sha256(diagnosis_hash.encode("utf-8")).hexdigest(),
+        captured_at=recorded_diagnosis.observed_at,
+        metadata={
+            "diagnosis_id": recorded_diagnosis.diagnosis_id,
+            "task_id": recorded_diagnosis.task_id,
+            "squad_id": recorded_diagnosis.squad_id,
+            "run_id": recorded_diagnosis.run_id,
+            "provider_version": recorded_diagnosis.provider_version,
+            "provider_build_id": recorded_diagnosis.provider_build_id,
+        },
+    )
+    initial = Attempt(
+        attempt_id="attempt-" + key.removeprefix("sha256:"),
+        idempotency_key=key,
+        signal=diagnosis_hash,
+        base_commit=base_commit,
+        strategy_version=strategy_version,
+        input_snapshot=snapshot,
+        source_diagnosis_id=recorded_diagnosis.diagnosis_id,
+        source_diagnosis_hash=diagnosis_hash,
+        model_version=model_version,
+        prompt_version=prompt_version,
+        created_at=recorded_diagnosis.observed_at,
+        updated_at=recorded_diagnosis.observed_at,
+    )
+    recorded_attempt = ledger.record_attempt(initial)
+    if recorded_diagnosis.status is HaDiagnosisStatus.CONVERGED:
+        return recorded_attempt
+    rejected = Attempt.model_validate(
+        {
+            **recorded_attempt.model_dump(),
+            "status": AttemptStatus.REJECTED,
+            "failure_reason": recorded_diagnosis.reason,
+            "updated_at": recorded_diagnosis.observed_at,
+        }
+    )
+    return ledger.transition_attempt(rejected)
+
+
 __all__ = [
     "HaDiagnosis", "HaDiagnosisError", "HaDiagnosisFinding", "HaDiagnosisStatus",
-    "collect_squad_diagnosis", "normalize_squad_status", "rehydrate_diagnosis",
+    "collect_squad_diagnosis", "normalize_squad_status", "record_squad_diagnosis_attempt",
+    "rehydrate_diagnosis",
 ]

@@ -16,6 +16,8 @@ from src.ha_cli import (
     ProcessResult,
     SubprocessTransport,
 )
+from src.models import AttemptStage, AttemptStatus
+from src.storage import Ledger
 
 
 BUILD = "build-123"
@@ -245,6 +247,69 @@ def test_cli_rejects_explicit_wrong_build_identity(tmp_path: Path) -> None:
     payload = json.loads(result.stdout)
     assert payload["ok"] is False
     assert "build id drift" in payload["error"]
+
+
+def test_cli_squad_diagnose_records_diagnosis_attempt_without_real_provider(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config = _config(tmp_path)
+    transport = FixtureTransport(
+        [
+            {"ok": True, "command": "version", "version": "0.1.0"},
+            {"schema": "command-receipt/v2", "ok": True, "squadRunId": "run-1"},
+            {"ok": True, "command": "version", "version": "0.1.0"},
+            {
+                "schema": "command-receipt/v2",
+                "ok": True,
+                "status": "completed",
+                "decision": {"kind": "converged", "summary": "Found the boundary."},
+            },
+        ]
+    )
+    fixture_adapter = HaCliAdapter(config, transport)
+    identities = []
+
+    def capture_adapter(_executable, _entry, _stamp, version, build_id):
+        identities.append((version, build_id))
+        return fixture_adapter
+
+    monkeypatch.setattr(cli_module, "_adapter", capture_adapter)
+    ledger_path = tmp_path / "history.db"
+    result = CliRunner().invoke(
+        app,
+        [
+            "ha",
+            "squad-diagnose",
+            "--root", str(tmp_path),
+            "--executable", str(config.executable),
+            "--cli-entry", str(config.cli_entry),
+            "--build-id-file", str(config.build_id_file),
+            "--ledger", str(ledger_path),
+            "--diagnosis-id", "diag-1",
+            "--squad-id", "mi-ha-governance",
+            "--instance", "leader",
+            "--cwd", ".",
+            "--task", "task-1",
+            "--prompt", "Inspect the repository.",
+            "--base-commit", "a" * 40,
+            "--strategy-version", "ha-diagnosis-v1",
+            "--model-version", "ha-squad/provider-0.1.0",
+            "--prompt-version", "diagnosis-prompt-v1",
+            "--interval-seconds", "0",
+            "--deadline-seconds", "2",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert identities == [(CURRENT_VERSION, CURRENT_BUILD_ID)]
+    payload = json.loads(result.stdout)
+    assert payload["schema"] == "ha-diagnosis-attempt-receipt/v1"
+    assert payload["diagnosis"]["diagnosis_id"] == "diag-1"
+    assert payload["attempt"]["status"] == AttemptStatus.PROPOSED.value
+    assert payload["attempt"]["stage"] == AttemptStage.CAPTURED.value
+    attempt = Ledger(ledger_path).get_attempt(payload["attempt"]["attempt_id"])
+    assert attempt is not None
+    assert attempt.source_diagnosis_id == "diag-1"
 
 
 def test_cli_help_exposes_only_diagnostic_surface() -> None:

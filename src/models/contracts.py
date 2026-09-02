@@ -194,6 +194,8 @@ class Attempt(ContractModel):
     base_commit: str = Field(pattern=r"^[0-9a-f]{7,64}$")
     strategy_version: str = Field(min_length=1, max_length=100)
     input_snapshot: InputSnapshot
+    source_diagnosis_id: str | None = Field(default=None, min_length=1, max_length=200)
+    source_diagnosis_hash: str | None = Field(default=None, pattern=r"^sha256:[0-9a-f]{64}$")
     proposal: MutationProposal | None = None
     status: AttemptStatus = AttemptStatus.PROPOSED
     stage: AttemptStage = AttemptStage.CAPTURED
@@ -216,6 +218,8 @@ class Attempt(ContractModel):
 
     @model_validator(mode="after")
     def validate_state(self) -> Attempt:
+        if (self.source_diagnosis_id is None) != (self.source_diagnosis_hash is None):
+            raise ValueError("source diagnosis id and hash must be supplied together")
         if self.status is AttemptStatus.FAILED and not self.failure_reason:
             raise ValueError("failed attempts require a failure_reason")
         return self

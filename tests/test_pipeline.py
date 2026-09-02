@@ -12,6 +12,7 @@ from src.acceptance import (
     plan_candidate_acceptance,
 )
 from src.attribution import AttributionHypothesis, BaselineObservation, CandidateChangeEvidence
+from src.ha_diagnosis import HaDiagnosis, HaDiagnosisStatus, record_squad_diagnosis_attempt
 from src.models import AttemptStage, AttemptStatus, InputSnapshot
 from src.pipeline import (
     PipelineError,
@@ -28,10 +29,17 @@ from src.pipeline import (
 from src.storage import Ledger, LedgerConflictError
 
 
-def _fixtures(*, passed: bool = False):
+def _fixtures(
+    *,
+    passed: bool = False,
+    attempt_id: str = "attempt-1",
+    signal_signature: str = "signal-v1",
+    model_version: str = "model-v1",
+    prompt_version: str = "prompt-v1",
+):
     baseline = BaselineObservation(
-        attempt_id="attempt-1",
-        signal_signature="signal-v1",
+        attempt_id=attempt_id,
+        signal_signature=signal_signature,
         base_commit="a" * 40,
         passed=passed,
         command="pytest tests/test_target.py",
@@ -44,8 +52,8 @@ def _fixtures(*, passed: bool = False):
         confidence=0.8,
         root_cause="the dependency contract changed",
         affected_paths=["src/target.py"],
-        model_version="model-v1",
-        prompt_version="prompt-v1",
+        model_version=model_version,
+        prompt_version=prompt_version,
     )
     candidate = CandidateChangeEvidence(
         hypothesis_hash=hypothesis.hypothesis_hash,
@@ -207,6 +215,53 @@ def test_pipeline_persists_one_attempt_lifecycle_and_replays_idempotently(tmp_pa
     assert first == replay
     assert ledger.count() == 1
     assert [event.stage for event in ledger.iter_attempt_events("attempt-1")] == list(
+        AttemptStage
+    )
+
+
+def test_pipeline_reuses_captured_diagnosis_attempt_and_preserves_source(tmp_path):
+    ledger = Ledger(tmp_path / "history.db")
+    diagnosis = HaDiagnosis(
+        diagnosis_id="diag-1",
+        task_id="task-1",
+        squad_id="squad-1",
+        run_id="run-1",
+        status=HaDiagnosisStatus.CONVERGED,
+        summary="Found the failure boundary.",
+        provider_version="provider-v1",
+        provider_build_id="build-1",
+        poll_attempts=1,
+        receipt_digest="sha256:" + "c" * 64,
+        observed_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    attempt = record_squad_diagnosis_attempt(
+        ledger,
+        diagnosis,
+        base_commit="a" * 40,
+        strategy_version="strategy-v1",
+        model_version="model-v1",
+        prompt_version="prompt-v1",
+    )
+    fixtures = _fixtures(
+        attempt_id=attempt.attempt_id,
+        signal_signature=attempt.signal,
+    )
+
+    run_pipeline(
+        *fixtures,
+        ledger=ledger,
+        input_snapshot=attempt.input_snapshot,
+        strategy_version="strategy-v1",
+    )
+
+    completed = ledger.get_attempt(attempt.attempt_id)
+    assert completed is not None
+    assert completed.status is AttemptStatus.SUCCEEDED
+    assert completed.stage is AttemptStage.COMPLETED
+    assert completed.source_diagnosis_id == diagnosis.diagnosis_id
+    assert completed.source_diagnosis_hash == diagnosis.record_hash
+    assert ledger.count() == 1
+    assert [event.stage for event in ledger.iter_attempt_events(attempt.attempt_id)] == list(
         AttemptStage
     )
 
