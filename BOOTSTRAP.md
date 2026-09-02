@@ -232,8 +232,9 @@ Phase 1 已加入 Python 3.12 项目骨架：`src/config.py`、`src/models/contr
 `src/storage/ledger_db.py`，以及聚焦的模型和 SQLite migration/idempotency/concurrency 测试。
 契约使用 UTC aware datetime、封闭枚举/Literal、`default_factory`、长度约束、secret-shaped
 metadata 脱敏和多文件 `MutationProposal`（base commit、派生 patch hash、model/prompt version、
-test evidence、residual risks）。账本使用 schema version、`BEGIN IMMEDIATE`、唯一
-idempotency key、冲突拒绝和重复 migration 安全重跑。
+test evidence、residual risks）。账本使用 schema v3、`BEGIN IMMEDIATE`、唯一
+idempotency key、追加式 `attempt_events`、阶段必需哈希、冲突拒绝和重复 migration 安全重跑。
+现有 `ha squad-diagnose` 可将受控 HA diagnosis 记录与 captured Attempt 建立不可变来源身份，并由后续 pipeline 完成同一 Attempt 的阶段推进。
 
 实际验证命令：
 
@@ -244,8 +245,7 @@ uv sync --directory /home/cyr/projects/meta-improver
 /home/cyr/projects/meta-improver/.venv/bin/python -m compileall -q src tests
 ```
 
-最终测试结果为 `8 passed`；未实现 Phase 2 及后续 CI/Issue 摄入、目标沙箱、PR、daemon 常驻
-和 self-evolve。SQLite 账本当前是单 schema 版本，后续 schema 扩展需要新增显式 migration。
+在 2026-09-02 集成 attempt lifecycle 后，主干全量回归为 `355 passed, 2 warnings`，定向诊断/账本回归为 `94 passed, 2 warnings`；未实现目标沙箱、PR 发布门禁、daemon 常驻和 self-evolve。旧 schema v2 数据可迁移到 v3；历史只有 diagnosis 而无可反推 signal 的记录不会被自动虚构成 Attempt。
 
 ## Provider 升级记录（2026-09-02）
 

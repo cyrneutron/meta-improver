@@ -39,6 +39,8 @@
 - **HA 目标项目的 `harness/`**：在 MI 第一次正式治理 HA 之前初始化；记录每个 HA 改进任务、复现事实、候选变更、验证证据、review 和 closeout。该目录是私有嵌套账本，不默认进入公开代码 PR。
 - **MI 的 `.improver_history/history.db`**：记录所有候选 attempt（成功、失败、拒绝、重试）、模型/Prompt 版本、输入和 patch 哈希；这是 MI 的运行时经验库，不替代任一 HA 账本。
 
+2026-09-02 起，该 ledger 使用 schema v3：`attempts` 保留最新快照，`attempt_events` 保留追加式阶段证据。`ha squad-diagnose` 会将受控 Squad diagnosis 与一条可重放的 captured Attempt 绑定，后续 pipeline 使用同一 identity 推进 baseline、attribution、patch validation 和 acceptance。当前 diagnosis 命令以 diagnosis record hash 作为 handoff signal；已存在但无法反推上游 signal 的 6 条 diagnosis 不会被自动虚构成 Attempt。
+
 公开 PR、GitHub Actions 结果和 issue 讨论是审查证据。它们需要被 MI 脱敏、引用并写入相应 task/evidence，但不能替代 `harness/` 的权威记录。GitHub Actions 通过也不会自动完成 HA task；仍需按当前 HA 版本完成 execution、review、consent 和 completion 门禁。
 
 ## 稳定 CLI 提供者与可变目标 clone
@@ -91,7 +93,7 @@ MI 的治理写入始终调用 CLI provider 的稳定 CLI。若 MI 修改 HA CLI
 
 - 实现 CI、Issue、local log 摄入；先脱敏、限长，再生成稳定 signature。
 - HA adapter 读取 `harness/` 权威文档和 artifacts，投影只做新鲜度校验和加速。
-- 只输出诊断报告，不修改目标仓库，不创建 PR；用 fixture 证明可重放。
+- 只输出诊断报告，不修改目标仓库，不创建 PR；用 fixture 证明可重放。`ha squad-diagnose` 已提供受控诊断和 captured Attempt 的共同回执，但仍不执行 patch 或提交。
 
 ## Phase 3：受控沙箱与严格补丁
 
@@ -106,6 +108,7 @@ MI 的治理写入始终调用 CLI provider 的稳定 CLI。若 MI 修改 HA CLI
 - 先复现 baseline 失败，再调用模型；模型输出必须经过结构化 schema 校验。
 - 只有 targeted test 通过、全量回归无退化、复杂度/成本/安全门禁通过，才接受候选。
 - 报告包含信号引用、复现结果、根因假设、变更文件、base/patch hash、模型和 Prompt 版本、完整测试结果与 residual risk。
+- 当前纯 pipeline 已将各阶段回执和失败落入同一 Attempt；下一个真实 HA target 案例将验证这条路径是否足以支持外部 signal 的前置创建。
 
 ## Phase 5：proposal PR 与调度
 
