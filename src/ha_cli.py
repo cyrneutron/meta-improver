@@ -265,7 +265,13 @@ class HaCliAdapter:
         receipt_schema = payload.get("schema")
         if parts != ("capabilities",) and receipt_schema != "command-receipt/v2":
             raise HaCliError("HA CLI returned an unsupported receipt schema")
-        ok = code == 0 if parts == ("capabilities",) else payload.get("ok") is True
+        async_squad_started = (
+            parts[:2] == ("squad", "run")
+            and payload.get("outcome") == "running"
+            and isinstance(payload.get("squadRunId"), str)
+            and bool(payload["squadRunId"])
+        )
+        ok = code == 0 if parts == ("capabilities",) else payload.get("ok") is True or async_squad_started
         return HaCliReceipt(
             status=HaCliStatus.SUCCEEDED if code == 0 and ok else HaCliStatus.REJECTED,
             command=list(parts), provider_version=version, provider_build_id=build_id,

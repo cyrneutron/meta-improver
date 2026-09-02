@@ -94,6 +94,23 @@ def test_squad_run_uses_fixed_argv_and_repository_relative_cwd(tmp_path: Path) -
     assert transport.calls[1][1]["env"] == {}
 
 
+def test_squad_run_accepts_async_running_receipt_with_run_id(tmp_path: Path) -> None:
+    transport = FixtureTransport([
+        {"ok": True, "command": "version", "version": "0.1.0"},
+        {
+            "schema": "command-receipt/v2",
+            "ok": False,
+            "outcome": "running",
+            "squadRunId": "run-1",
+        },
+    ])
+    receipt = HaCliAdapter(_config(tmp_path), transport).squad_run(
+        tmp_path, "squad-1", "instance-1", ".", "task-1", "prompt-1"
+    )
+    assert receipt.status is HaCliStatus.SUCCEEDED
+    assert receipt.receipt and receipt.receipt["squadRunId"] == "run-1"
+
+
 @pytest.mark.parametrize("cwd", ["/tmp/outside", "../outside", "src/../outside", "C:\\tmp\\outside"])
 def test_squad_run_rejects_non_repository_relative_cwd(tmp_path: Path, cwd: str) -> None:
     transport = FixtureTransport([{"ok": True, "command": "version", "version": "0.1.0"}])
