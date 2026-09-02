@@ -246,3 +246,23 @@ uv sync --directory /home/cyr/projects/meta-improver
 
 最终测试结果为 `8 passed`；未实现 Phase 2 及后续 CI/Issue 摄入、目标沙箱、PR、daemon 常驻
 和 self-evolve。SQLite 账本当前是单 schema 版本，后续 schema 扩展需要新增显式 migration。
+
+## Provider 升级记录（2026-09-02）
+
+按 provider runbook 将 `/home/cyr/projects/harness-anything` 快进到已合入的
+`dbf7182ac68f0555169c80df8cabb84b70e786b4`，并执行 `npm ci` 与
+`npm run build -w @harness-anything/cli`。
+
+- CLI version：`0.0.1`
+- CLI build id：`0e7daddf-1da5-4d4d-8052-37c763bf925d`
+- Node：`v24.18.0`
+- Candidate validation：`npm ci`、CLI build、`version --json`、`capabilities --json`、
+  `quickstart:demo` 均通过。
+- Target preservation：`/home/cyr/projects/ha-target` 仍为 commit
+  `a5b09c2c20e8e041bc3aea5a2ac677d4a42bae31`，本轮未修改其 tracked 内容。
+
+该 provider 随后重新构建并由当前 daemon 加载为 build id
+`852a87e8-a6a5-4c99-9275-160a9cefb704`；`daemon status` 报告 loaded/disk 一致且
+`drifted=false`，MI 的真实 `ha check` 通过。之后 HA target 的首次正式改进通过 PR #2
+合入，target `main` 与 `origin/main` 当前均为 merge commit
+`241396c2c6730be1b5c2836c9ad08343657cfc05`。

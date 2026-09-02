@@ -14,14 +14,15 @@
 - 每次尝试记录 `base_commit`、输入快照哈希、模型/Prompt 版本、patch 哈希、测试结果、幂等键和回滚点。
 - self-evolve 首阶段只允许离线修改 L1 Prompt/规则；权限、审计、门禁、沙箱和凭据处理属于 immutable policy core。
 
-## 当前基线
+## 当前基线（2026-09-02）
 
-- HA commit：`b47b93b1a28408ded2849792f8fad55963c30713`
-- HA CLI version：`0.1.0`
-- CLI build id：`5fa644bc-4a6c-44a0-8a7d-f7897a1877a6`
+- HA commit：`dbf7182ac68f0555169c80df8cabb84b70e786b4`
+- HA CLI version：`0.0.1`
+- CLI build id：`852a87e8-a6a5-4c99-9275-160a9cefb704`
 - Node.js：`24.18.0`
 - Python：使用 `/home/cyr/projects/meta-improver/.venv/bin/python`，版本 `3.12.14`
 - HA 本地 CLI：`/home/cyr/projects/harness-anything/packages/cli/dist/cli/src/index.js`
+- HA target commit：`241396c2c6730be1b5c2836c9ad08343657cfc05`
 - 详细 bootstrap 验证：见 [BOOTSTRAP.md](./BOOTSTRAP.md)
 
 不要依赖 PATH 中的全局 `ha`；它可能来自另一份 checkout。升级 HA 时必须重新记录 commit/build id 并重跑 contract/smoke tests。
