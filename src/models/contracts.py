@@ -79,6 +79,15 @@ class AttemptStatus(StrEnum):
     REJECTED = "rejected"
 
 
+class AttemptStage(StrEnum):
+    CAPTURED = "captured"
+    BASELINE_EVALUATED = "baseline_evaluated"
+    DIAGNOSED = "diagnosed"
+    PATCH_VALIDATED = "patch_validated"
+    ACCEPTANCE_EVALUATED = "acceptance_evaluated"
+    COMPLETED = "completed"
+
+
 class TestStatus(StrEnum):
     PASSED = "passed"
     FAILED = "failed"
@@ -187,8 +196,14 @@ class Attempt(ContractModel):
     input_snapshot: InputSnapshot
     proposal: MutationProposal | None = None
     status: AttemptStatus = AttemptStatus.PROPOSED
+    stage: AttemptStage = AttemptStage.CAPTURED
     model_version: str = Field(min_length=1, max_length=200)
     prompt_version: str = Field(min_length=1, max_length=100)
+    baseline_hash: str | None = Field(default=None, pattern=r"^sha256:[0-9a-f]{64}$")
+    diagnosis_hash: str | None = Field(default=None, pattern=r"^sha256:[0-9a-f]{64}$")
+    patch_hash: str | None = Field(default=None, pattern=r"^sha256:[0-9a-f]{64}$")
+    acceptance_receipt_hash: str | None = Field(default=None, pattern=r"^sha256:[0-9a-f]{64}$")
+    pipeline_receipt_hash: str | None = Field(default=None, pattern=r"^sha256:[0-9a-f]{64}$")
     test_evidence: list[TestEvidence] = Field(default_factory=list, max_length=200)
     failure_reason: str | None = Field(default=None, max_length=2_000)
     created_at: datetime = Field(default_factory=utc_now)

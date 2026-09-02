@@ -1,4 +1,6 @@
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+import hashlib
 
 import pytest
 
@@ -10,6 +12,7 @@ from src.acceptance import (
     plan_candidate_acceptance,
 )
 from src.attribution import AttributionHypothesis, BaselineObservation, CandidateChangeEvidence
+from src.models import AttemptStage, AttemptStatus, InputSnapshot
 from src.pipeline import (
     PipelineError,
     PipelineFacade,
@@ -22,6 +25,7 @@ from src.pipeline import (
     rehydrate_pipeline_receipt,
     run_pipeline,
 )
+from src.storage import Ledger, LedgerConflictError
 
 
 def _fixtures(*, passed: bool = False):
@@ -77,6 +81,15 @@ def _fixtures(*, passed: bool = False):
     )
     acceptance_receipt = accept_candidate(acceptance_plan)
     return baseline, hypothesis, candidate, acceptance_plan, acceptance_receipt
+
+
+def _snapshot(content: str = "captured failure signal") -> InputSnapshot:
+    return InputSnapshot(
+        source="manual",
+        content=content,
+        content_sha256=hashlib.sha256(content.encode()).hexdigest(),
+        captured_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
 
 
 def test_success_and_replay_are_hash_bound():
@@ -157,3 +170,118 @@ def test_facade_and_plan_rehydration_are_deterministic():
     assert first.model_dump_json(by_alias=True) == second.model_dump_json(by_alias=True)
     assert rehydrate_pipeline_plan(first).model_dump() == first.model_dump()
     assert facade.replay(first).model_dump_json(by_alias=True) == facade.run(second).model_dump_json(by_alias=True)
+
+
+def test_pipeline_persists_one_attempt_lifecycle_and_replays_idempotently(tmp_path):
+    ledger = Ledger(tmp_path / "history.db")
+    fixtures = _fixtures()
+    first = run_pipeline(
+        *fixtures,
+        ledger=ledger,
+        input_snapshot=_snapshot(),
+        strategy_version="strategy-v1",
+    )
+    replay = replay_pipeline(
+        *_fixtures(),
+        ledger=ledger,
+        input_snapshot=_snapshot(),
+        strategy_version="strategy-v1",
+    )
+
+    attempt = ledger.get_attempt("attempt-1")
+    assert attempt is not None
+    assert attempt.status is AttemptStatus.SUCCEEDED
+    assert attempt.stage is AttemptStage.COMPLETED
+    assert attempt.base_commit == "a" * 40
+    assert attempt.model_version == "model-v1"
+    assert attempt.prompt_version == "prompt-v1"
+    assert attempt.baseline_hash == fixtures[0].observation_hash
+    assert attempt.diagnosis_hash == fixtures[1].hypothesis_hash
+    assert attempt.patch_hash == fixtures[2].patch_hash
+    assert attempt.acceptance_receipt_hash == fixtures[4].receipt_hash
+    assert attempt.pipeline_receipt_hash == first.receipt_hash
+    assert [evidence.command for evidence in attempt.test_evidence] == [
+        "pytest tests/test_target.py",
+        "pytest -q",
+    ]
+    assert first == replay
+    assert ledger.count() == 1
+    assert [event.stage for event in ledger.iter_attempt_events("attempt-1")] == list(
+        AttemptStage
+    )
+
+
+def test_pipeline_validation_failure_is_recorded_and_replayed(tmp_path):
+    ledger = Ledger(tmp_path / "history.db")
+    _, hypothesis, candidate, plan, receipt = _fixtures()
+    invalid_baseline = BaselineObservation(
+        attempt_id="attempt-1",
+        signal_signature="signal-v1",
+        base_commit="a" * 40,
+        passed=True,
+        command="pytest tests/test_target.py",
+        summary="baseline no longer reproduces the failure",
+        observed_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    arguments = (invalid_baseline, hypothesis, candidate, plan, receipt)
+
+    for _ in range(2):
+        with pytest.raises(PipelineError, match="failed baseline"):
+            run_pipeline(
+                *arguments,
+                ledger=ledger,
+                input_snapshot=_snapshot(),
+                strategy_version="strategy-v1",
+            )
+
+    attempt = ledger.get_attempt("attempt-1")
+    assert attempt is not None
+    assert attempt.status is AttemptStatus.REJECTED
+    assert attempt.stage is AttemptStage.BASELINE_EVALUATED
+    assert attempt.failure_reason == "pipeline requires a failed baseline"
+    assert [event.status for event in ledger.iter_attempt_events("attempt-1")] == [
+        AttemptStatus.PROPOSED,
+        AttemptStatus.RUNNING,
+        AttemptStatus.REJECTED,
+    ]
+
+
+def test_pipeline_same_key_with_different_input_fails_closed(tmp_path):
+    ledger = Ledger(tmp_path / "history.db")
+    run_pipeline(
+        *_fixtures(),
+        ledger=ledger,
+        input_snapshot=_snapshot(),
+        strategy_version="strategy-v1",
+    )
+
+    with pytest.raises(LedgerConflictError, match="different pipeline attempt"):
+        run_pipeline(
+            *_fixtures(),
+            ledger=ledger,
+            input_snapshot=_snapshot("different captured signal"),
+            strategy_version="strategy-v1",
+        )
+
+    assert ledger.count() == 1
+
+
+def test_concurrent_same_pipeline_attempt_has_one_event_per_stage(tmp_path):
+    ledger = Ledger(tmp_path / "history.db")
+
+    def run_once(_index):
+        return run_pipeline(
+            *_fixtures(),
+            ledger=ledger,
+            input_snapshot=_snapshot(),
+            strategy_version="strategy-v1",
+        )
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        receipts = list(pool.map(run_once, range(4)))
+
+    assert all(receipt == receipts[0] for receipt in receipts)
+    assert ledger.count() == 1
+    assert [event.stage for event in ledger.iter_attempt_events("attempt-1")] == list(
+        AttemptStage
+    )

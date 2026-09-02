@@ -1,9 +1,9 @@
-"""Pure, deterministic facade for the attribution-to-acceptance pipeline.
+"""Deterministic facade for the attribution-to-acceptance pipeline.
 
 The facade composes already captured Phase 4A attribution evidence and the
-Phase 4B acceptance decision.  It deliberately has no execution boundary:
-there are no model, repository, process, container, filesystem, socket, or
-environment integrations here.
+Phase 4B acceptance decision.  It has no model, repository, process, container,
+socket, or environment execution boundary. Callers may explicitly supply the
+local experience ledger to persist the otherwise pure validation lifecycle.
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Callable
 from enum import StrEnum
 from typing import Any, Literal
 
@@ -31,6 +32,15 @@ from src.attribution import (
     rehydrate_candidate,
     rehydrate_hypothesis,
 )
+from src.models import (
+    Attempt,
+    AttemptStage,
+    AttemptStatus,
+    InputSnapshot,
+    TestEvidence,
+)
+from src.models.contracts import TestStatus, utc_now
+from src.storage.ledger_db import Ledger, LedgerConflictError
 
 
 _HASH = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -46,6 +56,10 @@ def _digest(value: Any) -> str:
 
 class PipelineError(ValueError):
     """Raised when the pipeline cannot prove a hash-bound successful input."""
+
+    def __init__(self, message: str, *, stage: AttemptStage = AttemptStage.CAPTURED) -> None:
+        super().__init__(message)
+        self.stage = stage
 
 
 class _PipelineContract(BaseModel):
@@ -152,6 +166,175 @@ class PipelineReceipt(_PipelineContract):
         return self
 
 
+_StageCallback = Callable[[AttemptStage, dict[str, Any]], None]
+
+
+def _validation_test_evidence(value: PipelineInput) -> list[TestEvidence]:
+    gate = value.acceptance_plan.validation_gate
+    observed_at = value.baseline.observed_at
+    evidence = [
+        TestEvidence(
+            command=command,
+            status=TestStatus.PASSED,
+            output=gate.targeted_evidence,
+            ran_at=observed_at,
+        )
+        for command in value.candidate.targeted_tests
+    ]
+    evidence.extend(
+        TestEvidence(
+            command=command,
+            status=TestStatus.PASSED,
+            output=gate.regression_evidence,
+            ran_at=observed_at,
+        )
+        for command in value.candidate.regression_tests
+    )
+    return evidence
+
+
+class _AttemptRecorder:
+    def __init__(self, ledger: Ledger, attempt: Attempt) -> None:
+        self.ledger = ledger
+        self.attempt = attempt
+
+    def advance(self, stage: AttemptStage, changes: dict[str, Any]) -> None:
+        if self.attempt.status in {
+            AttemptStatus.SUCCEEDED,
+            AttemptStatus.FAILED,
+            AttemptStatus.REJECTED,
+        }:
+            return
+        current_stage = list(AttemptStage).index(self.attempt.stage)
+        target_stage = list(AttemptStage).index(stage)
+        if target_stage <= current_stage:
+            if any(getattr(self.attempt, key) != value for key, value in changes.items()):
+                raise LedgerConflictError(f"attempt stage {stage.value} has conflicting evidence")
+            return
+        if target_stage != current_stage + 1:
+            raise LedgerConflictError(
+                f"attempt stage cannot skip from {self.attempt.stage.value} to {stage.value}"
+            )
+        updated = Attempt.model_validate(
+            {
+                **self.attempt.model_dump(),
+                **changes,
+                "status": AttemptStatus.RUNNING,
+                "stage": stage,
+                "updated_at": utc_now(),
+            }
+        )
+        self.attempt = self.ledger.transition_attempt(updated)
+
+    def reject(self, stage: AttemptStage, reason: str) -> None:
+        if self.attempt.status is AttemptStatus.REJECTED:
+            if self.attempt.stage is stage and self.attempt.failure_reason == reason:
+                return
+            raise LedgerConflictError("replayed rejected attempt has conflicting outcome")
+        if self.attempt.status in {AttemptStatus.SUCCEEDED, AttemptStatus.FAILED}:
+            raise LedgerConflictError("attempt already has a different terminal outcome")
+        # A rejected snapshot names the last stage with complete evidence. The
+        # PipelineError stage identifies the gate that rejected the input.
+        stage = self.attempt.stage
+        updated = Attempt.model_validate(
+            {
+                **self.attempt.model_dump(),
+                "status": AttemptStatus.REJECTED,
+                "stage": stage,
+                "failure_reason": reason,
+                "updated_at": utc_now(),
+            }
+        )
+        self.attempt = self.ledger.transition_attempt(updated)
+
+    def succeed(self, receipt: PipelineReceipt) -> None:
+        changes = {"pipeline_receipt_hash": receipt.receipt_hash}
+        if self.attempt.status is AttemptStatus.SUCCEEDED:
+            if self.attempt.stage is AttemptStage.COMPLETED and all(
+                getattr(self.attempt, key) == value for key, value in changes.items()
+            ):
+                return
+            raise LedgerConflictError("replayed succeeded attempt has conflicting outcome")
+        if self.attempt.status in {AttemptStatus.FAILED, AttemptStatus.REJECTED}:
+            raise LedgerConflictError("attempt already has a different terminal outcome")
+        updated = Attempt.model_validate(
+            {
+                **self.attempt.model_dump(),
+                **changes,
+                "status": AttemptStatus.SUCCEEDED,
+                "stage": AttemptStage.COMPLETED,
+                "updated_at": utc_now(),
+            }
+        )
+        self.attempt = self.ledger.transition_attempt(updated)
+
+
+def _attempt_components(
+    value: PipelineInput | BaselineObservation | PipelinePlan,
+    hypothesis: AttributionHypothesis | None,
+) -> tuple[BaselineObservation, AttributionHypothesis]:
+    if isinstance(value, PipelinePlan):
+        return value.pipeline_input.baseline, value.pipeline_input.hypothesis
+    if isinstance(value, PipelineInput):
+        return value.baseline, value.hypothesis
+    if not isinstance(value, BaselineObservation) or not isinstance(hypothesis, AttributionHypothesis):
+        raise PipelineError("persisted pipeline requires baseline and hypothesis identities")
+    return value, hypothesis
+
+
+def _prepare_attempt_recorder(
+    value: PipelineInput | BaselineObservation | PipelinePlan,
+    hypothesis: AttributionHypothesis | None,
+    *,
+    ledger: Ledger | None,
+    input_snapshot: InputSnapshot | None,
+    strategy_version: str | None,
+) -> _AttemptRecorder | None:
+    supplied = (ledger is not None, input_snapshot is not None, strategy_version is not None)
+    if not any(supplied):
+        return None
+    if not all(supplied):
+        raise PipelineError("ledger, input_snapshot, and strategy_version must be supplied together")
+    assert ledger is not None and input_snapshot is not None and strategy_version is not None
+    baseline, diagnosis = _attempt_components(value, hypothesis)
+    key = _digest(
+        {
+            "signal": baseline.signal_signature,
+            "base_commit": baseline.base_commit,
+            "strategy_version": strategy_version,
+        }
+    )
+    initial = Attempt(
+        attempt_id=baseline.attempt_id,
+        idempotency_key=key,
+        signal=baseline.signal_signature,
+        base_commit=baseline.base_commit,
+        strategy_version=strategy_version,
+        input_snapshot=input_snapshot,
+        model_version=diagnosis.model_version,
+        prompt_version=diagnosis.prompt_version,
+        created_at=input_snapshot.captured_at,
+        updated_at=input_snapshot.captured_at,
+    )
+    existing = ledger.find_by_idempotency_key(key)
+    if existing is None:
+        existing = ledger.record_attempt(initial)
+    immutable = (
+        "attempt_id",
+        "idempotency_key",
+        "signal",
+        "base_commit",
+        "strategy_version",
+        "input_snapshot",
+        "model_version",
+        "prompt_version",
+        "created_at",
+    )
+    if any(getattr(existing, field) != getattr(initial, field) for field in immutable):
+        raise LedgerConflictError("idempotency key belongs to a different pipeline attempt")
+    return _AttemptRecorder(ledger, existing)
+
+
 def _rehydrate_input(value: PipelineInput) -> PipelineInput:
     if not isinstance(value, PipelineInput) or value.input_hash is None:
         raise PipelineError("cannot use an unhashed pipeline input")
@@ -251,6 +434,8 @@ def _validate_in_order(
     candidate: CandidateChangeEvidence | None = None,
     acceptance_plan: CandidateAcceptancePlan | None = None,
     acceptance_receipt: CandidateAcceptanceReceipt | None = None,
+    *,
+    stage_callback: _StageCallback | None = None,
 ) -> PipelineInput:
     """Validate in dependency order, preserving the fail-closed boundary."""
 
@@ -262,13 +447,35 @@ def _validate_in_order(
     try:
         baseline = rehydrate_baseline(raw_baseline)
     except Exception as exc:
-        raise PipelineError("baseline failed integrity validation") from exc
+        raise PipelineError(
+            "baseline failed integrity validation",
+            stage=AttemptStage.BASELINE_EVALUATED,
+        ) from exc
+    if stage_callback is not None:
+        stage_callback(
+            AttemptStage.BASELINE_EVALUATED,
+            {"baseline_hash": baseline.observation_hash},
+        )
     if baseline.passed is not False:
-        raise PipelineError("pipeline requires a failed baseline")
+        raise PipelineError(
+            "pipeline requires a failed baseline",
+            stage=AttemptStage.BASELINE_EVALUATED,
+        )
 
     # Attribution bindings are the second gate and do not trust acceptance yet.
     try:
         hydrated_hypothesis = rehydrate_hypothesis(raw_hypothesis, baseline)
+    except Exception as exc:
+        raise PipelineError(
+            "hypothesis/candidate bindings failed validation",
+            stage=AttemptStage.DIAGNOSED,
+        ) from exc
+    if stage_callback is not None:
+        stage_callback(
+            AttemptStage.DIAGNOSED,
+            {"diagnosis_hash": hydrated_hypothesis.hypothesis_hash},
+        )
+    try:
         hydrated_candidate = rehydrate_candidate(
             raw_candidate,
             baseline,
@@ -276,25 +483,51 @@ def _validate_in_order(
             raw_candidate.patch_hash,
         )
     except Exception as exc:
-        raise PipelineError("hypothesis/candidate bindings failed validation") from exc
+        raise PipelineError(
+            "hypothesis/candidate bindings failed validation",
+            stage=AttemptStage.PATCH_VALIDATED,
+        ) from exc
+    if stage_callback is not None:
+        stage_callback(
+            AttemptStage.PATCH_VALIDATED,
+            {"patch_hash": hydrated_candidate.patch_hash},
+        )
 
     # Acceptance plan and receipt are checked only after attribution is sound.
     try:
         plan = rehydrate_candidate_acceptance_plan(raw_plan)
     except Exception as exc:
-        raise PipelineError("acceptance plan failed integrity validation") from exc
+        raise PipelineError(
+            "acceptance plan failed integrity validation",
+            stage=AttemptStage.ACCEPTANCE_EVALUATED,
+        ) from exc
     if plan.baseline.observation_hash != baseline.observation_hash:
-        raise PipelineError("acceptance plan baseline binding does not match pipeline baseline")
+        raise PipelineError(
+            "acceptance plan baseline binding does not match pipeline baseline",
+            stage=AttemptStage.ACCEPTANCE_EVALUATED,
+        )
     if plan.candidate.evidence_hash != hydrated_candidate.evidence_hash:
-        raise PipelineError("acceptance plan candidate binding does not match pipeline candidate")
+        raise PipelineError(
+            "acceptance plan candidate binding does not match pipeline candidate",
+            stage=AttemptStage.ACCEPTANCE_EVALUATED,
+        )
     if plan.hypothesis is not None and plan.hypothesis.hypothesis_hash != hydrated_hypothesis.hypothesis_hash:
-        raise PipelineError("acceptance plan hypothesis binding does not match pipeline hypothesis")
+        raise PipelineError(
+            "acceptance plan hypothesis binding does not match pipeline hypothesis",
+            stage=AttemptStage.ACCEPTANCE_EVALUATED,
+        )
     try:
         receipt = rehydrate_candidate_acceptance_receipt(raw_receipt)
     except Exception as exc:
-        raise PipelineError("acceptance receipt failed integrity validation") from exc
+        raise PipelineError(
+            "acceptance receipt failed integrity validation",
+            stage=AttemptStage.ACCEPTANCE_EVALUATED,
+        ) from exc
     if receipt.acceptance_plan.plan_hash != plan.plan_hash:
-        raise PipelineError("acceptance receipt is not bound to the acceptance plan")
+        raise PipelineError(
+            "acceptance receipt is not bound to the acceptance plan",
+            stage=AttemptStage.ACCEPTANCE_EVALUATED,
+        )
 
     try:
         normalized = PipelineInput(
@@ -305,23 +538,42 @@ def _validate_in_order(
             acceptance_receipt=receipt,
         )
     except Exception as exc:
-        raise PipelineError("pipeline input composition failed") from exc
+        raise PipelineError(
+            "pipeline input composition failed",
+            stage=AttemptStage.ACCEPTANCE_EVALUATED,
+        ) from exc
     if input_hash is not None and normalized.input_hash != input_hash:
-        raise PipelineError("pipeline input hash does not match validated contents")
+        raise PipelineError(
+            "pipeline input hash does not match validated contents",
+            stage=AttemptStage.ACCEPTANCE_EVALUATED,
+        )
+    if stage_callback is not None:
+        stage_callback(
+            AttemptStage.ACCEPTANCE_EVALUATED,
+            {
+                "acceptance_receipt_hash": normalized.acceptance_receipt.receipt_hash,
+                "test_evidence": _validation_test_evidence(normalized),
+            },
+        )
     return normalized
 
 
-def plan_pipeline(
+def _build_pipeline_plan(
     value: PipelineInput | BaselineObservation,
     hypothesis: AttributionHypothesis | None = None,
     candidate: CandidateChangeEvidence | None = None,
     acceptance_plan: CandidateAcceptancePlan | None = None,
     acceptance_receipt: CandidateAcceptanceReceipt | None = None,
+    *,
+    stage_callback: _StageCallback | None = None,
 ) -> PipelinePlan:
-    """Validate and compose a deterministic pipeline plan without execution."""
-
     normalized = _validate_in_order(
-        value, hypothesis, candidate, acceptance_plan, acceptance_receipt
+        value,
+        hypothesis,
+        candidate,
+        acceptance_plan,
+        acceptance_receipt,
+        stage_callback=stage_callback,
     )
     try:
         return PipelinePlan(
@@ -333,7 +585,24 @@ def plan_pipeline(
             acceptance_receipt_hash=normalized.acceptance_receipt.receipt_hash or "",
         )
     except Exception as exc:
-        raise PipelineError("pipeline plan bindings were rejected") from exc
+        raise PipelineError(
+            "pipeline plan bindings were rejected",
+            stage=AttemptStage.ACCEPTANCE_EVALUATED,
+        ) from exc
+
+
+def plan_pipeline(
+    value: PipelineInput | BaselineObservation,
+    hypothesis: AttributionHypothesis | None = None,
+    candidate: CandidateChangeEvidence | None = None,
+    acceptance_plan: CandidateAcceptancePlan | None = None,
+    acceptance_receipt: CandidateAcceptanceReceipt | None = None,
+) -> PipelinePlan:
+    """Validate and compose a deterministic pipeline plan without execution."""
+
+    return _build_pipeline_plan(
+        value, hypothesis, candidate, acceptance_plan, acceptance_receipt
+    )
 
 
 def run_pipeline(
@@ -342,38 +611,73 @@ def run_pipeline(
     candidate: CandidateChangeEvidence | None = None,
     acceptance_plan: CandidateAcceptancePlan | None = None,
     acceptance_receipt: CandidateAcceptanceReceipt | None = None,
+    *,
+    ledger: Ledger | None = None,
+    input_snapshot: InputSnapshot | None = None,
+    strategy_version: str | None = None,
 ) -> PipelineReceipt:
-    """Return a receipt only after ordered validation and plan rehydration."""
+    """Validate in order and optionally persist one replayable attempt lifecycle."""
 
-    if isinstance(value, PipelinePlan):
-        if value.plan_hash is None:
-            raise PipelineError("cannot use an unhashed pipeline plan")
-        # A plan is still a snapshot; re-run all semantic gates before issuing
-        # the receipt so mutating a nested object cannot bypass ordering.
-        normalized = _validate_in_order(value.pipeline_input)
-        if normalized.input_hash != value.pipeline_input.input_hash:
-            raise PipelineError("pipeline plan input changed after planning")
-        plan = rehydrate_pipeline_plan(value)
-        plan = rehydrate_pipeline_plan(
-            PipelinePlan(
-                pipeline_input=normalized,
-                baseline_hash=plan.baseline_hash,
-                hypothesis_hash=plan.hypothesis_hash,
-                candidate_hash=plan.candidate_hash,
-                acceptance_plan_hash=plan.acceptance_plan_hash,
+    recorder = _prepare_attempt_recorder(
+        value,
+        hypothesis,
+        ledger=ledger,
+        input_snapshot=input_snapshot,
+        strategy_version=strategy_version,
+    )
+    try:
+        if isinstance(value, PipelinePlan):
+            if value.plan_hash is None:
+                raise PipelineError("cannot use an unhashed pipeline plan")
+            # A plan is still a snapshot; re-run all semantic gates before issuing
+            # the receipt so mutating a nested object cannot bypass ordering.
+            normalized = _validate_in_order(
+                value.pipeline_input,
+                stage_callback=recorder.advance if recorder is not None else None,
+            )
+            if normalized.input_hash != value.pipeline_input.input_hash:
+                raise PipelineError(
+                    "pipeline plan input changed after planning",
+                    stage=AttemptStage.ACCEPTANCE_EVALUATED,
+                )
+            plan = rehydrate_pipeline_plan(value)
+            plan = rehydrate_pipeline_plan(
+                PipelinePlan(
+                    pipeline_input=normalized,
+                    baseline_hash=plan.baseline_hash,
+                    hypothesis_hash=plan.hypothesis_hash,
+                    candidate_hash=plan.candidate_hash,
+                    acceptance_plan_hash=plan.acceptance_plan_hash,
+                    acceptance_receipt_hash=plan.acceptance_receipt_hash,
+                )
+            )
+        else:
+            plan = _build_pipeline_plan(
+                value,
+                hypothesis,
+                candidate,
+                acceptance_plan,
+                acceptance_receipt,
+                stage_callback=recorder.advance if recorder is not None else None,
+            )
+        try:
+            receipt = PipelineReceipt(
+                pipeline_plan=plan,
+                status=PipelineStatus.SUCCEEDED,
                 acceptance_receipt_hash=plan.acceptance_receipt_hash,
             )
-        )
-    else:
-        plan = plan_pipeline(value, hypothesis, candidate, acceptance_plan, acceptance_receipt)
-    try:
-        return PipelineReceipt(
-            pipeline_plan=plan,
-            status=PipelineStatus.SUCCEEDED,
-            acceptance_receipt_hash=plan.acceptance_receipt_hash,
-        )
-    except Exception as exc:
-        raise PipelineError("pipeline receipt was rejected") from exc
+        except Exception as exc:
+            raise PipelineError(
+                "pipeline receipt was rejected",
+                stage=AttemptStage.COMPLETED,
+            ) from exc
+    except PipelineError as exc:
+        if recorder is not None:
+            recorder.reject(exc.stage, str(exc))
+        raise
+    if recorder is not None:
+        recorder.succeed(receipt)
+    return receipt
 
 
 replay_pipeline = run_pipeline

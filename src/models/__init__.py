@@ -2,6 +2,7 @@
 
 from .contracts import (
     Attempt,
+    AttemptStage,
     AttemptStatus,
     InputSnapshot,
     MutationProposal,
@@ -12,6 +13,7 @@ from .contracts import (
 
 __all__ = [
     "Attempt",
+    "AttemptStage",
     "AttemptStatus",
     "InputSnapshot",
     "MutationProposal",
@@ -19,4 +21,3 @@ __all__ = [
     "ResidualRisk",
     "TestEvidence",
 ]
-

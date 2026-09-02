@@ -15,6 +15,7 @@ from src.ingestion import (
     normalize_issue,
     normalize_local_log,
 )
+from src.models import AttemptStage, AttemptStatus
 from src.storage import Ledger, LedgerConflictError
 
 
@@ -64,6 +65,14 @@ def test_ci_non_success_conclusions_map_to_internal_failure(conclusion: str, tmp
     assert attempt.status.value == "failed"
     assert attempt.failure_reason == "CI conclusion was not success"
     assert attempt.input_snapshot.content_sha256 == hashlib.sha256(b"").hexdigest()
+    assert [event.status for event in _service(tmp_path).ledger.iter_attempt_events(attempt.attempt_id)] == [
+        AttemptStatus.PROPOSED,
+        AttemptStatus.FAILED,
+    ]
+    assert all(
+        event.stage is AttemptStage.CAPTURED
+        for event in _service(tmp_path).ledger.iter_attempt_events(attempt.attempt_id)
+    )
 
 
 def test_ci_success_conclusion_is_preserved_without_failure_mapping(tmp_path) -> None:

@@ -47,11 +47,21 @@ class IngestionService:
                 captured_at=event.observed_at,
                 metadata={"external_id": event.external_id, **event.metadata},
             ),
-            status=AttemptStatus.FAILED if ci_failed else AttemptStatus.PROPOSED,
-            failure_reason="CI conclusion was not success" if ci_failed else None,
+            status=AttemptStatus.PROPOSED,
             model_version=self.model_version,
             prompt_version=self.prompt_version,
             created_at=event.observed_at,
             updated_at=event.observed_at,
         )
-        return self.ledger.record_attempt(attempt)
+        recorded = self.ledger.record_attempt(attempt)
+        if not ci_failed:
+            return recorded
+        failed = Attempt.model_validate(
+            {
+                **recorded.model_dump(),
+                "status": AttemptStatus.FAILED,
+                "failure_reason": "CI conclusion was not success",
+                "updated_at": event.observed_at,
+            }
+        )
+        return self.ledger.transition_attempt(failed)
