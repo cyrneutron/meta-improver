@@ -549,13 +549,17 @@ def read_task_context(
     expected_package_path = f"tasks/{package.name}"
     if package_path != expected_package_path:
         raise HAAdapterError(f"task package path mismatch: {package}")
-    if index.get("packagePath") != expected_package_path:
-        raise HAAdapterError(f"task INDEX package path mismatch: {package}")
-    if index.get("title") != contract.get("title"):
-        raise HAAdapterError(f"task title mismatch: {package}")
     lifecycle = index.get("lifecycle")
     if not isinstance(lifecycle, dict) or not isinstance(lifecycle.get("status"), str):
         raise HAAdapterError(f"task status mismatch: {package}")
+    index_package_path = index.get("packagePath")
+    migrated_without_index_path = (
+        lifecycle.get("engine") == "migration-import/v1" and index_package_path is None
+    )
+    if index_package_path != expected_package_path and not migrated_without_index_path:
+        raise HAAdapterError(f"task INDEX package path mismatch: {package}")
+    if index.get("title") != contract.get("title"):
+        raise HAAdapterError(f"task title mismatch: {package}")
     status = lifecycle["status"]
 
     executions: list[HAExecution] = []

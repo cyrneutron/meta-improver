@@ -124,6 +124,57 @@ def test_task_context_reads_minimal_canonical_package_and_redacts(tmp_path) -> N
     assert "[REDACTED]" in context.progress_entries[0].text
 
 
+def test_task_context_accepts_migrated_index_without_redundant_package_path(tmp_path) -> None:
+    index = f'''---
+schema: task-package/v2
+task_id: {TASK_ID}
+title: "Fixture task"
+lifecycle:
+  engine: migration-import/v1
+  status: active
+---
+# Fixture task
+'''
+
+    package = _task_fixture(tmp_path, index=index)
+
+    context = read_task_context(tmp_path, TASK_ID)
+
+    assert context.package_path == f"tasks/{package.name}"
+
+
+@pytest.mark.parametrize(
+    "index",
+    [
+        f'''---
+schema: task-package/v2
+task_id: {TASK_ID}
+title: "Fixture task"
+lifecycle:
+  status: active
+---
+# Fixture task
+''',
+        f'''---
+schema: task-package/v2
+task_id: {TASK_ID}
+title: "Fixture task"
+lifecycle:
+  engine: migration-import/v1
+  status: active
+packagePath: tasks/not-the-fixture
+---
+# Fixture task
+''',
+    ],
+)
+def test_task_context_rejects_missing_or_wrong_index_package_path_outside_migration_exception(tmp_path, index) -> None:
+    _task_fixture(tmp_path, index=index)
+
+    with pytest.raises(HAAdapterError, match="INDEX package path mismatch"):
+        read_task_context(tmp_path, TASK_ID)
+
+
 def test_task_context_truncates_oversized_progress_with_deterministic_marker(tmp_path) -> None:
     entries = "\n".join(
         f"### 2026-08-29T00:{index:02d}:00Z\n\nprogress entry {index} " + ("x" * 1_000) + "\n"
