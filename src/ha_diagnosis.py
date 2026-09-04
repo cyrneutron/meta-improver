@@ -150,6 +150,13 @@ def _run_id(payload: dict[str, Any]) -> str | None:
 def _decision(payload: dict[str, Any]) -> dict[str, Any] | None:
     value = payload.get("decision")
     if isinstance(value, dict):
+        # HA status receipts keep the leader's final synthesis in ``report``
+        # rather than duplicating its structured fields. Preserve the report
+        # as a bounded summary; do not infer findings from Markdown.
+        if value.get("kind") == "converged" and not value.get("summary"):
+            report = value.get("report")
+            if isinstance(report, str) and report.strip():
+                return {**value, "summary": report}
         return value
     for key in ("detail", "squadRun", "run"):
         nested = _nested_mapping(payload.get(key))

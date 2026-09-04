@@ -121,6 +121,25 @@ def test_nested_leader_decision_is_normalized(tmp_path: Path):
     assert diagnosis.summary == "nested"
 
 
+def test_leader_report_only_decision_is_normalized_as_summary(tmp_path: Path):
+    diagnosis = collect_squad_diagnosis(
+        adapter(tmp_path, [
+            {"ok": True, "command": "version", "version": "0.1.0"},
+            {"schema": "command-receipt/v2", "ok": True, "squadRunId": "run-1"},
+            {"ok": True, "command": "version", "version": "0.1.0"},
+            {"schema": "command-receipt/v2", "ok": True, "status": "converged", "leaders": [{
+                "status": "succeeded", "decision": {"kind": "converged", "report": "synthesis report"}
+            }]},
+        ]),
+        tmp_path,
+        diagnosis_id="diag-report", squad_id="mi-ha-governance", instance="leader", cwd=".", task_id="task-1",
+        prompt="Inspect the repository.", interval_seconds=0, deadline_seconds=2,
+    )
+    assert diagnosis.status is HaDiagnosisStatus.CONVERGED
+    assert diagnosis.summary == "synthesis report"
+    assert diagnosis.findings == []
+
+
 def test_diagnosis_rehydration_and_ledger_conflict_fail_closed(tmp_path: Path):
     diagnosis = collect_squad_diagnosis(
         adapter(tmp_path, [
