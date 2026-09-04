@@ -266,3 +266,15 @@ uv sync --directory /home/cyr/projects/meta-improver
 `drifted=false`，MI 的真实 `ha check` 通过。之后 HA target 的首次正式改进通过 PR #2
 合入，target `main` 与 `origin/main` 当前均为 merge commit
 `241396c2c6730be1b5c2836c9ad08343657cfc05`。
+
+## Provider 稳定晋升复验（2026-09-04）
+
+provider `/home/cyr/projects/harness-anything` 当前使用兼容修复 commit
+`e6ff3f1ab7b878d78583fd892305221c322be49e`，由
+`/home/cyr/.nvm/versions/node/v24.18.0/bin/node` 执行构建后的 CLI。
+构建生成的 build id 为 `354028c2-1149-449d-abdc-0b07f81c386a`；daemon 重启后报告
+loaded/disk build id 一致、`drifted=false`，且 loaded commit 为该 commit。
+使用同一 executable、CLI entry 和 build-id 文件运行 MI `ha check` 返回
+`status=succeeded`；target Squad `mi-ha-governance` 为 `ready`，唯一 Leader probe 为
+`ready`。使用 `/usr/bin/node`（Node 12）会因语法版本不足失败，故不属于有效 provider
+运行时。

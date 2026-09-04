@@ -9,7 +9,7 @@
 5. `/home/cyr/projects/harness-anything/docs-release/architecture/zh/03-projection.md`
 6. `/home/cyr/projects/harness-anything/docs-release/architecture/zh/04-gates-in-the-pipeline.md`
 
-当前已验证的基线：HA commit 为 `b47b93b1a28408ded2849792f8fad55963c30713`，CLI build id 为 `5fa644bc-4a6c-44a0-8a7d-f7897a1877a6`，Python 使用 `/home/cyr/projects/meta-improver/.venv/bin/python`（3.12.14）。优先调用 `/home/cyr/projects/harness-anything/packages/cli/dist/cli/src/index.js`，不要依赖 PATH 中可能指向其他 checkout 的全局 `ha`。
+当前已验证的基线：HA commit 为 `e6ff3f1ab7b878d78583fd892305221c322be49e`，CLI build id 为 `354028c2-1149-449d-abdc-0b07f81c386a`，Python 使用 `/home/cyr/projects/meta-improver/.venv/bin/python`（3.12.14）。优先调用 `/home/cyr/projects/harness-anything/packages/cli/dist/cli/src/index.js`，不要依赖 PATH 中可能指向其他 checkout 的全局 `ha`。
 
 当前 `/home/cyr/projects/harness-anything` 是稳定 CLI provider：保持干净，只负责读取上游提交和提供已晋升的 `ha` CLI，不初始化目标账本，也不承载候选改动。公开源库提交可以从其 `origin` 读取。MI 自己的 `harness/` 负责 MI 开发记忆；等 MI 达到 Phase 2/3、第一次正式治理 HA 之前，再在 `/home/cyr/projects/ha-target`（或等价独立 target clone）中初始化 HA 的 `harness/`。MI 的 `.improver_history/history.db` 记录所有候选 attempt，不能替代任一 `harness/`。
 

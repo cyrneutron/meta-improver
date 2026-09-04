@@ -16,12 +16,12 @@
 
 ## 当前基线（2026-09-02）
 
-- HA commit：`dbf7182ac68f0555169c80df8cabb84b70e786b4`
+- HA commit：`e6ff3f1ab7b878d78583fd892305221c322be49e`
 - HA CLI version：`0.0.1`
-- CLI build id：`852a87e8-a6a5-4c99-9275-160a9cefb704`
+- CLI build id：`354028c2-1149-449d-abdc-0b07f81c386a`
 - Node.js：`24.18.0`
 - Python：使用 `/home/cyr/projects/meta-improver/.venv/bin/python`，版本 `3.12.14`
-- HA 本地 CLI：`/home/cyr/projects/harness-anything/packages/cli/dist/cli/src/index.js`
+- HA 本地 CLI：`/home/cyr/projects/harness-anything/packages/cli/dist/cli/src/index.js`（Node `/home/cyr/.nvm/versions/node/v24.18.0/bin/node`）
 - HA target commit：`241396c2c6730be1b5c2836c9ad08343657cfc05`
 - 详细 bootstrap 验证：见 [BOOTSTRAP.md](./BOOTSTRAP.md)
 

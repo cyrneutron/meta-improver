@@ -22,7 +22,7 @@ ha_app = typer.Typer(help="Inspect the pinned Harness Anything provider.", no_ar
 app.add_typer(ha_app, name="ha")
 
 DEFAULT_HA_CLI_VERSION = "0.0.1"
-DEFAULT_HA_CLI_BUILD_ID = "852a87e8-a6a5-4c99-9275-160a9cefb704"
+DEFAULT_HA_CLI_BUILD_ID = "354028c2-1149-449d-abdc-0b07f81c386a"
 
 
 def _adapter(executable: Path, cli_entry: Path, build_id_file: Path, version: str, build_id: str) -> HaCliAdapter:
