@@ -10,9 +10,10 @@ from typing import Iterator
 
 from src.ha_diagnosis import HaDiagnosis, rehydrate_diagnosis
 from src.models import Attempt, AttemptStage, AttemptStatus
+from src.target_publication import TargetPublicationReceipt, rehydrate_target_publication
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 _STAGE_ORDER = {stage: index for index, stage in enumerate(AttemptStage)}
 _REQUIRED_EVIDENCE = {
@@ -125,6 +126,26 @@ class Ledger:
                     FROM attempts"""
                 )
                 db.execute("INSERT OR REPLACE INTO schema_meta(key, value) VALUES ('version', '3')")
+                version = 3
+            if version < 4:
+                db.execute(
+                    """CREATE TABLE IF NOT EXISTS target_publications (
+                        receipt_hash TEXT PRIMARY KEY,
+                        request_hash TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        repository TEXT NOT NULL,
+                        target_task_id TEXT NOT NULL,
+                        accepted_commit TEXT NOT NULL,
+                        receipt_json TEXT NOT NULL,
+                        observed_at TEXT NOT NULL
+                    )"""
+                )
+                db.execute(
+                    """CREATE INDEX IF NOT EXISTS target_publications_request_idx
+                    ON target_publications (request_hash, observed_at)"""
+                )
+                db.execute("INSERT OR REPLACE INTO schema_meta(key, value) VALUES ('version', '4')")
+                version = 4
             db.execute("COMMIT")
 
     @staticmethod
@@ -442,3 +463,61 @@ class Ledger:
                     "SELECT record_json FROM diagnoses WHERE task_id = ? ORDER BY observed_at, diagnosis_id", (task_id,)
                 ).fetchall()
         yield from (HaDiagnosis.model_validate_json(row[0]) for row in rows)
+
+    def record_target_publication(
+        self, receipt: TargetPublicationReceipt
+    ) -> TargetPublicationReceipt:
+        """Append one immutable, hash-bound target publication receipt."""
+
+        value = rehydrate_target_publication(receipt)
+        receipt_hash = value.receipt_hash or ""
+        payload = json.dumps(
+            value.model_dump(mode="json", by_alias=True), sort_keys=True, separators=(",", ":")
+        )
+        with self._lock, self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            existing = db.execute(
+                "SELECT receipt_json FROM target_publications WHERE receipt_hash = ?", (receipt_hash,)
+            ).fetchone()
+            if existing:
+                if existing[0] != payload:
+                    db.execute("ROLLBACK")
+                    raise LedgerConflictError("publication receipt hash belongs to different data")
+                db.execute("COMMIT")
+                return TargetPublicationReceipt.model_validate_json(existing[0])
+            db.execute(
+                """INSERT INTO target_publications (
+                    receipt_hash, request_hash, status, repository, target_task_id,
+                    accepted_commit, receipt_json, observed_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    receipt_hash,
+                    value.request_hash,
+                    value.status.value,
+                    value.repository,
+                    value.target_task_id,
+                    value.accepted_commit,
+                    payload,
+                    value.observed_at.isoformat(),
+                ),
+            )
+            db.execute("COMMIT")
+        return value
+
+    def iter_target_publications(
+        self, request_hash: str | None = None
+    ) -> Iterator[TargetPublicationReceipt]:
+        """Read publication receipts in observed order without mutating state."""
+
+        with self._connect() as db:
+            if request_hash is None:
+                rows = db.execute(
+                    "SELECT receipt_json FROM target_publications ORDER BY observed_at, receipt_hash"
+                ).fetchall()
+            else:
+                rows = db.execute(
+                    """SELECT receipt_json FROM target_publications
+                    WHERE request_hash = ? ORDER BY observed_at, receipt_hash""",
+                    (request_hash,),
+                ).fetchall()
+        yield from (TargetPublicationReceipt.model_validate_json(row[0]) for row in rows)

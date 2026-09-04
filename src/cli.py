@@ -15,11 +15,20 @@ from src.ha_diagnosis import (
     record_squad_diagnosis_attempt,
 )
 from src.storage import Ledger, LedgerConflictError
+from src.target_publication import (
+    TargetPublicationConfig,
+    TargetPublicationError,
+    TargetPublicationRequest,
+    TargetPublicationStatus,
+    TargetPublisher,
+)
 
 
 app = typer.Typer(help="Meta-Improver proposal-only control surface.", no_args_is_help=True)
 ha_app = typer.Typer(help="Inspect the pinned Harness Anything provider.", no_args_is_help=True)
+target_app = typer.Typer(help="Publish accepted target commits through a controlled pull request.", no_args_is_help=True)
 app.add_typer(ha_app, name="ha")
+app.add_typer(target_app, name="target")
 
 DEFAULT_HA_CLI_VERSION = "0.0.1"
 DEFAULT_HA_CLI_BUILD_ID = "354028c2-1149-449d-abdc-0b07f81c386a"
@@ -163,6 +172,59 @@ def ha_squad_diagnose(
             sort_keys=True,
         )
     )
+
+
+@target_app.command("publish")
+def target_publish(
+    root: Annotated[Path, typer.Option(exists=True, file_okay=False, resolve_path=True)],
+    git_executable: Annotated[Path, typer.Option(exists=True, dir_okay=False, resolve_path=True)],
+    git_sha256: Annotated[str, typer.Option()],
+    gh_executable: Annotated[Path, typer.Option(exists=True, dir_okay=False, resolve_path=True)],
+    gh_sha256: Annotated[str, typer.Option()],
+    github_home: Annotated[Path, typer.Option(exists=True, file_okay=False, resolve_path=True)],
+    repository: Annotated[str, typer.Option()],
+    target_task_id: Annotated[str, typer.Option()],
+    accepted_execution_id: Annotated[str, typer.Option()],
+    accepted_commit: Annotated[str, typer.Option()],
+    title: Annotated[str, typer.Option()],
+    body_file: Annotated[Path, typer.Option(exists=True, dir_okay=False, resolve_path=True)],
+    ledger_path: Annotated[Path | None, typer.Option("--ledger", dir_okay=False, resolve_path=True)] = None,
+    max_poll_attempts: Annotated[int, typer.Option(min=1, max=120)] = 30,
+    poll_interval_seconds: Annotated[float, typer.Option(min=0, max=60)] = 5.0,
+) -> None:
+    """Create or reuse an accepted target PR, then collect required CI checks.
+
+    This command never pushes protected main, approves a review, or merges a PR.
+    Its non-success JSON receipt is intentional evidence and returns exit code 1.
+    """
+
+    try:
+        request = TargetPublicationRequest(
+            repository=repository,
+            target_task_id=target_task_id,
+            accepted_execution_id=accepted_execution_id,
+            accepted_commit=accepted_commit,
+            title=title,
+            body=body_file.read_text(encoding="utf-8"),
+            max_poll_attempts=max_poll_attempts,
+            poll_interval_seconds=poll_interval_seconds,
+        )
+        publisher = TargetPublisher(
+            TargetPublicationConfig(
+                git_executable=git_executable,
+                git_sha256=git_sha256,
+                gh_executable=gh_executable,
+                gh_sha256=gh_sha256,
+                github_home=github_home,
+            )
+        )
+        receipt = publisher.publish(root, request, ledger=Ledger(ledger_path) if ledger_path else None)
+    except (OSError, TargetPublicationError, ValueError, LedgerConflictError) as exc:
+        typer.echo(json.dumps({"ok": False, "error": str(exc)}, sort_keys=True))
+        raise typer.Exit(1) from exc
+    typer.echo(receipt.model_dump_json(by_alias=True))
+    if receipt.status is not TargetPublicationStatus.SUCCEEDED:
+        raise typer.Exit(1)
 
 
 if __name__ == "__main__":
