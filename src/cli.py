@@ -34,10 +34,19 @@ DEFAULT_HA_CLI_VERSION = "0.0.1"
 DEFAULT_HA_CLI_BUILD_ID = "354028c2-1149-449d-abdc-0b07f81c386a"
 
 
-def _adapter(executable: Path, cli_entry: Path, build_id_file: Path, version: str, build_id: str) -> HaCliAdapter:
+def _adapter(
+    executable: Path,
+    cli_entry: Path,
+    build_id_file: Path,
+    version: str,
+    build_id: str,
+    daemon_user_root: Path | None = None,
+    daemon_id: str = "default",
+) -> HaCliAdapter:
     return HaCliAdapter(HaCliConfig(
         executable=executable, cli_entry=cli_entry, build_id_file=build_id_file,
         expected_version=version, expected_build_id=build_id,
+        daemon_user_root=daemon_user_root, daemon_id=daemon_id,
     ))
 
 
@@ -47,12 +56,18 @@ def ha_check(
     executable: Annotated[Path, typer.Option(exists=True, dir_okay=False, resolve_path=True)],
     cli_entry: Annotated[Path, typer.Option(exists=True, dir_okay=False, resolve_path=True)],
     build_id_file: Annotated[Path, typer.Option(exists=True, dir_okay=False, resolve_path=True)],
+    daemon_user_root: Annotated[
+        Path | None, typer.Option(exists=True, file_okay=False, resolve_path=True)
+    ] = None,
+    daemon_id: Annotated[str, typer.Option()] = "default",
     version: Annotated[str, typer.Option()] = DEFAULT_HA_CLI_VERSION,
     build_id: Annotated[str, typer.Option()] = DEFAULT_HA_CLI_BUILD_ID,
 ) -> None:
     """Verify version/build identity and print capabilities as JSON."""
     try:
-        receipt = _adapter(executable, cli_entry, build_id_file, version, build_id).capabilities(root)
+        receipt = _adapter(
+            executable, cli_entry, build_id_file, version, build_id, daemon_user_root, daemon_id
+        ).capabilities(root)
     except HaCliError as exc:
         typer.echo(json.dumps({"ok": False, "error": str(exc)}, sort_keys=True))
         raise typer.Exit(1) from exc
@@ -70,14 +85,18 @@ def ha_squad_run(
     cwd: Annotated[str, typer.Option("--cwd")],
     task_id: Annotated[str, typer.Option("--task")],
     task: Annotated[str, typer.Option("--prompt")],
+    daemon_user_root: Annotated[
+        Path | None, typer.Option(exists=True, file_okay=False, resolve_path=True)
+    ] = None,
+    daemon_id: Annotated[str, typer.Option()] = "default",
     version: Annotated[str, typer.Option()] = DEFAULT_HA_CLI_VERSION,
     build_id: Annotated[str, typer.Option()] = DEFAULT_HA_CLI_BUILD_ID,
 ) -> None:
     """Emit the receipt for one fixed, proposal-only squad request."""
     try:
-        receipt = _adapter(executable, cli_entry, build_id_file, version, build_id).squad_run(
-            root, squad_id, instance, cwd, task_id, task
-        )
+        receipt = _adapter(
+            executable, cli_entry, build_id_file, version, build_id, daemon_user_root, daemon_id
+        ).squad_run(root, squad_id, instance, cwd, task_id, task)
     except HaCliError as exc:
         typer.echo(json.dumps({"ok": False, "error": str(exc)}, sort_keys=True))
         raise typer.Exit(1) from exc
@@ -91,6 +110,10 @@ def ha_squad_status(
     cli_entry: Annotated[Path, typer.Option(exists=True, dir_okay=False, resolve_path=True)],
     build_id_file: Annotated[Path, typer.Option(exists=True, dir_okay=False, resolve_path=True)],
     run_id: Annotated[str, typer.Option("--run-id")],
+    daemon_user_root: Annotated[
+        Path | None, typer.Option(exists=True, file_okay=False, resolve_path=True)
+    ] = None,
+    daemon_id: Annotated[str, typer.Option()] = "default",
     interval_seconds: Annotated[float, typer.Option("--interval-seconds", min=0, max=60)] = 1.0,
     max_attempts: Annotated[int, typer.Option("--max-attempts", min=1, max=1000)] = 30,
     deadline_seconds: Annotated[float, typer.Option("--deadline-seconds", min=0.001, max=300)] = 30.0,
@@ -99,11 +122,10 @@ def ha_squad_status(
 ) -> None:
     """Poll only squad status and emit a bounded JSON receipt."""
     try:
-        receipt = _adapter(executable, cli_entry, build_id_file, version, build_id).poll_squad_status(
-            root,
-            run_id,
-            interval_seconds=interval_seconds,
-            max_attempts=max_attempts,
+        receipt = _adapter(
+            executable, cli_entry, build_id_file, version, build_id, daemon_user_root, daemon_id
+        ).poll_squad_status(
+            root, run_id, interval_seconds=interval_seconds, max_attempts=max_attempts,
             deadline_seconds=deadline_seconds,
         )
     except HaCliError as exc:
@@ -129,6 +151,10 @@ def ha_squad_diagnose(
     strategy_version: Annotated[str, typer.Option("--strategy-version")],
     model_version: Annotated[str, typer.Option("--model-version")],
     prompt_version: Annotated[str, typer.Option("--prompt-version")],
+    daemon_user_root: Annotated[
+        Path | None, typer.Option(exists=True, file_okay=False, resolve_path=True)
+    ] = None,
+    daemon_id: Annotated[str, typer.Option()] = "default",
     interval_seconds: Annotated[float, typer.Option("--interval-seconds", min=0, max=60)] = 1.0,
     max_attempts: Annotated[int, typer.Option("--max-attempts", min=1, max=1000)] = 30,
     deadline_seconds: Annotated[float, typer.Option("--deadline-seconds", min=0.001, max=300)] = 30.0,
@@ -139,7 +165,9 @@ def ha_squad_diagnose(
 
     try:
         diagnosis = collect_squad_diagnosis(
-            _adapter(executable, cli_entry, build_id_file, version, build_id),
+            _adapter(
+                executable, cli_entry, build_id_file, version, build_id, daemon_user_root, daemon_id
+            ),
             root,
             diagnosis_id=diagnosis_id,
             squad_id=squad_id,

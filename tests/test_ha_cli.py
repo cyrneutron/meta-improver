@@ -221,8 +221,12 @@ def test_cli_ha_commands_share_current_default_identity(tmp_path: Path, monkeypa
     config = _config(tmp_path)
     captured = []
 
-    def capture_adapter(executable, cli_entry, build_id_file, version, build_id):
-        captured.append((executable, cli_entry, build_id_file, version, build_id))
+    def capture_adapter(
+        executable, cli_entry, build_id_file, version, build_id, daemon_user_root, daemon_id
+    ):
+        captured.append(
+            (executable, cli_entry, build_id_file, version, build_id, daemon_user_root, daemon_id)
+        )
         return _CliAdapter()
 
     monkeypatch.setattr(cli_module, "_adapter", capture_adapter)
@@ -241,7 +245,57 @@ def test_cli_ha_commands_share_current_default_identity(tmp_path: Path, monkeypa
 
     assert result.exit_code == 0
     assert len(captured) == 1
-    assert captured[0][3:] == (CURRENT_VERSION, CURRENT_BUILD_ID)
+    assert captured[0][3:5] == (CURRENT_VERSION, CURRENT_BUILD_ID)
+    assert captured[0][5:] == (None, "default")
+
+
+@pytest.mark.parametrize(
+    "command,args",
+    [
+        ("check", []),
+        (
+            "squad-run",
+            [
+                "--squad-id", "squad-1",
+                "--instance", "instance-1",
+                "--cwd", "src",
+                "--task", "task-1",
+                "--prompt", "diagnose",
+            ],
+        ),
+        ("squad-status", ["--run-id", "run-1"]),
+    ],
+)
+def test_cli_ha_commands_pass_explicit_daemon_routing(tmp_path: Path, monkeypatch, command, args) -> None:
+    config = _config(tmp_path)
+    captured = []
+
+    def capture_adapter(
+        executable, cli_entry, build_id_file, version, build_id, daemon_user_root, daemon_id
+    ):
+        captured.append(
+            (executable, cli_entry, build_id_file, version, build_id, daemon_user_root, daemon_id)
+        )
+        return _CliAdapter()
+
+    monkeypatch.setattr(cli_module, "_adapter", capture_adapter)
+    result = CliRunner().invoke(
+        app,
+        [
+            "ha", command,
+            "--root", str(tmp_path),
+            "--executable", str(config.executable),
+            "--cli-entry", str(config.cli_entry),
+            "--build-id-file", str(config.build_id_file),
+            "--daemon-user-root", str(tmp_path),
+            "--daemon-id", "mi-ha-target-runtime",
+            *args,
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert len(captured) == 1
+    assert captured[0][5:] == (tmp_path, "mi-ha-target-runtime")
 
 
 def test_cli_rejects_explicit_wrong_build_identity(tmp_path: Path) -> None:
@@ -286,8 +340,10 @@ def test_cli_squad_diagnose_records_diagnosis_attempt_without_real_provider(
     fixture_adapter = HaCliAdapter(config, transport)
     identities = []
 
-    def capture_adapter(_executable, _entry, _stamp, version, build_id):
-        identities.append((version, build_id))
+    def capture_adapter(
+        _executable, _entry, _stamp, version, build_id, daemon_user_root, daemon_id
+    ):
+        identities.append((version, build_id, daemon_user_root, daemon_id))
         return fixture_adapter
 
     monkeypatch.setattr(cli_module, "_adapter", capture_adapter)
@@ -301,6 +357,8 @@ def test_cli_squad_diagnose_records_diagnosis_attempt_without_real_provider(
             "--executable", str(config.executable),
             "--cli-entry", str(config.cli_entry),
             "--build-id-file", str(config.build_id_file),
+            "--daemon-user-root", str(tmp_path),
+            "--daemon-id", "mi-ha-target-runtime",
             "--ledger", str(ledger_path),
             "--diagnosis-id", "diag-1",
             "--squad-id", "mi-ha-governance",
@@ -318,7 +376,7 @@ def test_cli_squad_diagnose_records_diagnosis_attempt_without_real_provider(
     )
 
     assert result.exit_code == 0
-    assert identities == [(CURRENT_VERSION, CURRENT_BUILD_ID)]
+    assert identities == [(CURRENT_VERSION, CURRENT_BUILD_ID, tmp_path, "mi-ha-target-runtime")]
     payload = json.loads(result.stdout)
     assert payload["schema"] == "ha-diagnosis-attempt-receipt/v1"
     assert payload["diagnosis"]["diagnosis_id"] == "diag-1"
