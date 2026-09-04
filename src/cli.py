@@ -42,11 +42,13 @@ def _adapter(
     build_id: str,
     daemon_user_root: Path | None = None,
     daemon_id: str = "default",
+    timeout_seconds: float = 30.0,
 ) -> HaCliAdapter:
     return HaCliAdapter(HaCliConfig(
         executable=executable, cli_entry=cli_entry, build_id_file=build_id_file,
         expected_version=version, expected_build_id=build_id,
         daemon_user_root=daemon_user_root, daemon_id=daemon_id,
+        timeout_seconds=timeout_seconds,
     ))
 
 
@@ -60,13 +62,15 @@ def ha_check(
         Path | None, typer.Option(exists=True, file_okay=False, resolve_path=True)
     ] = None,
     daemon_id: Annotated[str, typer.Option()] = "default",
+    timeout_seconds: Annotated[float, typer.Option("--timeout-seconds", min=0.001, max=300)] = 30.0,
     version: Annotated[str, typer.Option()] = DEFAULT_HA_CLI_VERSION,
     build_id: Annotated[str, typer.Option()] = DEFAULT_HA_CLI_BUILD_ID,
 ) -> None:
     """Verify version/build identity and print capabilities as JSON."""
     try:
         receipt = _adapter(
-            executable, cli_entry, build_id_file, version, build_id, daemon_user_root, daemon_id
+            executable, cli_entry, build_id_file, version, build_id, daemon_user_root, daemon_id,
+            timeout_seconds,
         ).capabilities(root)
     except HaCliError as exc:
         typer.echo(json.dumps({"ok": False, "error": str(exc)}, sort_keys=True))
@@ -89,13 +93,15 @@ def ha_squad_run(
         Path | None, typer.Option(exists=True, file_okay=False, resolve_path=True)
     ] = None,
     daemon_id: Annotated[str, typer.Option()] = "default",
+    timeout_seconds: Annotated[float, typer.Option("--timeout-seconds", min=0.001, max=300)] = 30.0,
     version: Annotated[str, typer.Option()] = DEFAULT_HA_CLI_VERSION,
     build_id: Annotated[str, typer.Option()] = DEFAULT_HA_CLI_BUILD_ID,
 ) -> None:
     """Emit the receipt for one fixed, proposal-only squad request."""
     try:
         receipt = _adapter(
-            executable, cli_entry, build_id_file, version, build_id, daemon_user_root, daemon_id
+            executable, cli_entry, build_id_file, version, build_id, daemon_user_root, daemon_id,
+            timeout_seconds,
         ).squad_run(root, squad_id, instance, cwd, task_id, task)
     except HaCliError as exc:
         typer.echo(json.dumps({"ok": False, "error": str(exc)}, sort_keys=True))
@@ -114,6 +120,7 @@ def ha_squad_status(
         Path | None, typer.Option(exists=True, file_okay=False, resolve_path=True)
     ] = None,
     daemon_id: Annotated[str, typer.Option()] = "default",
+    timeout_seconds: Annotated[float, typer.Option("--timeout-seconds", min=0.001, max=300)] = 30.0,
     interval_seconds: Annotated[float, typer.Option("--interval-seconds", min=0, max=60)] = 1.0,
     max_attempts: Annotated[int, typer.Option("--max-attempts", min=1, max=1000)] = 30,
     deadline_seconds: Annotated[float, typer.Option("--deadline-seconds", min=0.001, max=300)] = 30.0,
@@ -123,7 +130,8 @@ def ha_squad_status(
     """Poll only squad status and emit a bounded JSON receipt."""
     try:
         receipt = _adapter(
-            executable, cli_entry, build_id_file, version, build_id, daemon_user_root, daemon_id
+            executable, cli_entry, build_id_file, version, build_id, daemon_user_root, daemon_id,
+            timeout_seconds,
         ).poll_squad_status(
             root, run_id, interval_seconds=interval_seconds, max_attempts=max_attempts,
             deadline_seconds=deadline_seconds,
@@ -155,6 +163,7 @@ def ha_squad_diagnose(
         Path | None, typer.Option(exists=True, file_okay=False, resolve_path=True)
     ] = None,
     daemon_id: Annotated[str, typer.Option()] = "default",
+    timeout_seconds: Annotated[float, typer.Option("--timeout-seconds", min=0.001, max=300)] = 30.0,
     interval_seconds: Annotated[float, typer.Option("--interval-seconds", min=0, max=60)] = 1.0,
     max_attempts: Annotated[int, typer.Option("--max-attempts", min=1, max=1000)] = 30,
     deadline_seconds: Annotated[float, typer.Option("--deadline-seconds", min=0.001, max=300)] = 30.0,
@@ -166,7 +175,8 @@ def ha_squad_diagnose(
     try:
         diagnosis = collect_squad_diagnosis(
             _adapter(
-                executable, cli_entry, build_id_file, version, build_id, daemon_user_root, daemon_id
+                executable, cli_entry, build_id_file, version, build_id, daemon_user_root, daemon_id,
+                timeout_seconds,
             ),
             root,
             diagnosis_id=diagnosis_id,
