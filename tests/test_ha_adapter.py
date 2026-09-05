@@ -200,7 +200,16 @@ def test_task_context_bounds_a_single_oversized_progress_entry(tmp_path) -> None
     assert "progress truncated: retained bounded head and tail windows" in context.progress_entries[-1].text
 
 
-@pytest.mark.skipif(not (PROJECT_ROOT / "harness/tasks/task_a471cddf039eafe9c2e3986b83-implement-phase-2a-local-fixture-ingestion-and-diagnostics").is_dir(), reason="local task fixture is absent")
+@pytest.mark.skipif(
+    not any(
+        (
+            PROJECT_ROOT
+            / "harness/tasks/task_a471cddf039eafe9c2e3986b83-implement-phase-2a-local-fixture-ingestion-and-diagnostics"
+            / "executions"
+        ).glob("*.md")
+    ),
+    reason="local task execution fixture is absent",
+)
 def test_current_mi_task_context_reads_successfully() -> None:
     context = read_task_context(PROJECT_ROOT, "task_a471cddf039eafe9c2e3986b83")
 
