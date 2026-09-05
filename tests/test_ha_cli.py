@@ -88,8 +88,8 @@ def test_squad_run_uses_fixed_argv_and_repository_relative_cwd(tmp_path: Path) -
         tmp_path, "squad-1", "instance-1", "src/work", "task-1", "prompt-1"
     )
     assert receipt.status is HaCliStatus.SUCCEEDED
-    assert transport.calls[1][0][-12:] == [
-        "squad", "run", "squad-1", "--instance", "instance-1", "--cwd", "src/work", "--task", "task-1", "--prompt", "prompt-1", "--json"
+    assert transport.calls[1][0][-14:] == [
+        "squad", "run", "squad-1", "--instance", "instance-1", "--cwd", "src/work", "--permission-mode", "bypass", "--task", "task-1", "--prompt", "prompt-1", "--json"
     ]
     assert transport.calls[1][1]["env"] == {}
 
