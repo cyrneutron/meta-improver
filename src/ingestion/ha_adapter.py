@@ -554,7 +554,7 @@ def read_task_context(
         raise HAAdapterError(f"task status mismatch: {package}")
     index_package_path = index.get("packagePath")
     migrated_without_index_path = (
-        lifecycle.get("engine") == "migration-import/v1" and index_package_path is None
+        lifecycle.get("engine") == "migration-import/v1" and "packagePath" not in index
     )
     if index_package_path != expected_package_path and not migrated_without_index_path:
         raise HAAdapterError(f"task INDEX package path mismatch: {package}")
