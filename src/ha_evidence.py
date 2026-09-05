@@ -17,6 +17,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from src.attribution import AttributionHypothesis, BaselineObservation, CandidateChangeEvidence
+from src.proposal import ProposalPayload
 
 
 _HASH = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -218,11 +219,45 @@ def evidence_to_attribution(
     return baseline, hypothesis, candidate
 
 
+def evidence_to_proposal(
+    evidence: HATargetEvidence,
+    *,
+    repository: str,
+    head: str,
+    title: str,
+    body: str,
+    acceptance_receipt_hash: str,
+) -> ProposalPayload:
+    """Compose a proposal payload from verified HA evidence and acceptance."""
+
+    value = rehydrate_ha_target_evidence(evidence)
+    if value.candidate_commit is None or value.diff_hash is None or value.acceptance_hash is None:
+        raise HAEvidenceError("proposal requires candidate commit, diff, and acceptance evidence")
+    paths = sorted({artifact.path for artifact in value.artifacts if artifact.kind == "diff"})
+    if not paths:
+        raise HAEvidenceError("proposal requires at least one diff artifact path")
+    try:
+        return ProposalPayload(
+            repo=repository,
+            head=head,
+            base="main",
+            base_commit=value.base_commit,
+            patch_hash=value.diff_hash,
+            acceptance_receipt_hash=acceptance_receipt_hash,
+            changed_paths=paths,
+            title=title,
+            body=body,
+        )
+    except Exception as exc:
+        raise HAEvidenceError("HA evidence could not compose a proposal payload") from exc
+
+
 __all__ = [
     "HAEvidenceArtifact",
     "HAEvidenceError",
     "HATargetEvidence",
     "read_ha_target_evidence",
     "evidence_to_attribution",
+    "evidence_to_proposal",
     "rehydrate_ha_target_evidence",
 ]

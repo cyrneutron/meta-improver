@@ -4,6 +4,7 @@ from .ha_evidence import (
     HAEvidenceError,
     HATargetEvidence,
     evidence_to_attribution,
+    evidence_to_proposal,
     read_ha_target_evidence,
     rehydrate_ha_target_evidence,
 )
@@ -13,6 +14,7 @@ __all__ = [
     "HAEvidenceError",
     "HATargetEvidence",
     "evidence_to_attribution",
+    "evidence_to_proposal",
     "read_ha_target_evidence",
     "rehydrate_ha_target_evidence",
 ]
