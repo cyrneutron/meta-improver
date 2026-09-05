@@ -2,7 +2,11 @@ from datetime import datetime, timezone
 
 import pytest
 
-from src.ha_evidence import HAEvidenceArtifact, HAEvidenceError, HATargetEvidence, evidence_to_attribution, evidence_to_proposal, read_ha_target_evidence, rehydrate_ha_target_evidence
+from src.ha_evidence import HAEvidenceArtifact, HAEvidenceError, HATargetEvidence, evidence_to_attribution, evidence_to_proposal, read_ha_target_evidence, rehydrate_ha_target_evidence, run_ha_evidence_pipeline
+from src.acceptance import BaselineGateEvidence, QualityGateEvidence, ValidationGateEvidence, accept_candidate, plan_candidate_acceptance
+from src.models import InputSnapshot
+from src.storage import Ledger
+import hashlib
 
 
 def _bundle() -> HATargetEvidence:
@@ -95,3 +99,31 @@ def test_verified_evidence_composes_proposal_only_payload():
     assert proposal.base_commit == evidence.base_commit
     assert proposal.patch_hash == diff
     assert proposal.changed_paths == ["artifacts/diff.json"]
+
+
+def test_verified_evidence_pipeline_persists_replayable_attempt(tmp_path):
+    evidence = HATargetEvidence(
+        task_id="task-target-1", execution_id="execution-target-1", base_commit="a" * 40,
+        candidate_commit="b" * 40, squad_run_id="squad_run_1",
+        artifacts=[
+            HAEvidenceArtifact(kind="baseline", path="artifacts/baseline.json", digest="sha256:" + "a" * 64),
+            HAEvidenceArtifact(kind="diff", path="artifacts/diff.json", digest="sha256:" + "b" * 64),
+            HAEvidenceArtifact(kind="acceptance", path="artifacts/acceptance.json", digest="sha256:" + "c" * 64),
+        ], baseline_hash="sha256:" + "a" * 64, diff_hash="sha256:" + "b" * 64,
+        acceptance_hash="sha256:" + "c" * 64, observed_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    baseline, hypothesis, candidate = evidence_to_attribution(evidence)
+    plan = plan_candidate_acceptance(
+        baseline, candidate,
+        BaselineGateEvidence(baseline_hash=baseline.observation_hash, reproduction_command="ha baseline", reproduction_evidence="failed"),
+        ValidationGateEvidence(candidate_hash=candidate.evidence_hash, hypothesis_hash=hypothesis.hypothesis_hash, patch_hash=candidate.patch_hash, targeted_test_count=1, regression_test_count=1, targeted_evidence="passed", regression_evidence="passed"),
+        QualityGateEvidence(complexity_delta=0, cost_units=1, quality_evidence="passed"), hypothesis=hypothesis,
+    )
+    receipt = accept_candidate(plan)
+    content = "ha target failure"
+    snapshot = InputSnapshot(source="manual", content=content, content_sha256=hashlib.sha256(content.encode()).hexdigest(), captured_at=evidence.observed_at)
+    ledger = Ledger(tmp_path / "ledger.sqlite")
+    first = run_ha_evidence_pipeline(evidence, plan, receipt, ledger=ledger, input_snapshot=snapshot)
+    replay = run_ha_evidence_pipeline(evidence, plan, receipt, ledger=ledger, input_snapshot=snapshot)
+    assert first == replay
+    assert list(ledger.iter_attempts())[0].stage.value == "completed"

@@ -252,6 +252,36 @@ def evidence_to_proposal(
         raise HAEvidenceError("HA evidence could not compose a proposal payload") from exc
 
 
+def run_ha_evidence_pipeline(
+    evidence: HATargetEvidence,
+    acceptance_plan: Any,
+    acceptance_receipt: Any,
+    *,
+    ledger: Any,
+    input_snapshot: Any,
+    strategy_version: str = "ha-evidence-v1",
+) -> Any:
+    """Persist a verified HA bundle through MI's existing pipeline stages."""
+
+    from src.pipeline import PipelineError, run_pipeline
+
+    value = rehydrate_ha_target_evidence(evidence)
+    baseline, hypothesis, candidate = evidence_to_attribution(value)
+    try:
+        return run_pipeline(
+            baseline,
+            hypothesis,
+            candidate,
+            acceptance_plan,
+            acceptance_receipt,
+            ledger=ledger,
+            input_snapshot=input_snapshot,
+            strategy_version=strategy_version,
+        )
+    except PipelineError as exc:
+        raise HAEvidenceError(f"HA evidence pipeline rejected at {exc.stage.value}") from exc
+
+
 __all__ = [
     "HAEvidenceArtifact",
     "HAEvidenceError",
@@ -259,5 +289,6 @@ __all__ = [
     "read_ha_target_evidence",
     "evidence_to_attribution",
     "evidence_to_proposal",
+    "run_ha_evidence_pipeline",
     "rehydrate_ha_target_evidence",
 ]
