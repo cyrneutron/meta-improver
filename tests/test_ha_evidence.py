@@ -122,3 +122,38 @@ def test_verified_evidence_pipeline_persists_replayable_attempt(tmp_path):
     replay = run_ha_evidence_pipeline(evidence, plan, receipt, ledger=ledger, input_snapshot=snapshot)
     assert first == replay
     assert list(ledger.iter_attempts())[0].stage.value == "completed"
+
+
+def test_canonical_artifact_manifest_replays_to_proposal(tmp_path):
+    source = tmp_path / "source.md"
+    source.write_text("real HA callback relay validation\n", encoding="utf-8")
+    artifact_dir = tmp_path / "harness" / "tasks" / "task-target-1" / "artifacts"
+    artifact_dir.mkdir(parents=True)
+    artifact_path = artifact_dir / "diff.md"
+    artifact_path.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+    digest = "sha256:" + hashlib.sha256(artifact_path.read_bytes()).hexdigest()
+    manifest = HATargetEvidence(
+        task_id="task-target-1", execution_id="execution-target-1", base_commit="a" * 40,
+        candidate_commit="b" * 40, squad_run_id="squad_run_1",
+        artifacts=[
+            HAEvidenceArtifact(kind="baseline", path="harness/tasks/task-target-1/artifacts/diff.md", digest=digest),
+            HAEvidenceArtifact(kind="diff", path="harness/tasks/task-target-1/artifacts/diff.md", digest=digest),
+            HAEvidenceArtifact(kind="validation", path="harness/tasks/task-target-1/artifacts/diff.md", digest=digest),
+            HAEvidenceArtifact(kind="container", path="harness/tasks/task-target-1/artifacts/diff.md", digest=digest),
+            HAEvidenceArtifact(kind="acceptance", path="harness/tasks/task-target-1/artifacts/diff.md", digest=digest),
+        ], baseline_hash=digest, diff_hash=digest, validation_hash=digest,
+        container_hash=digest, acceptance_hash=digest,
+        targeted_tests=["npm run test:target"], regression_tests=["npm test"],
+        observed_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    manifest_path = artifact_dir / "evidence.json"
+    manifest_path.write_text(manifest.model_dump_json(by_alias=True), encoding="utf-8")
+    loaded = read_ha_target_evidence(tmp_path, "harness/tasks/task-target-1/artifacts/evidence.json")
+    baseline, hypothesis, candidate, plan, acceptance = build_ha_acceptance(loaded)
+    content = "real HA callback relay validation"
+    snapshot = InputSnapshot(source="manual", content=content, content_sha256=hashlib.sha256(content.encode()).hexdigest(), captured_at=loaded.observed_at)
+    receipt = run_ha_evidence_pipeline(loaded, plan, acceptance, ledger=Ledger(tmp_path / "ledger.sqlite"), input_snapshot=snapshot)
+    proposal = evidence_to_proposal(loaded, repository="cyrneutron/harness-anything", head="mi/task-target-1", title="fix: callback relay", body="Evidence-backed target proposal", acceptance_receipt_hash=acceptance.receipt_hash)
+    assert receipt.status.value == "succeeded"
+    assert proposal.patch_hash == digest
+    assert proposal.changed_paths == ["harness/tasks/task-target-1/artifacts/diff.md"]
