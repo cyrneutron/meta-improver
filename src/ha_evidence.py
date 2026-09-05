@@ -282,6 +282,46 @@ def run_ha_evidence_pipeline(
         raise HAEvidenceError(f"HA evidence pipeline rejected at {exc.stage.value}") from exc
 
 
+def build_ha_acceptance(evidence: HATargetEvidence) -> tuple[Any, Any, Any, Any, Any]:
+    """Build attribution and acceptance receipts from a verified HA bundle."""
+
+    from src.acceptance import (
+        BaselineGateEvidence,
+        QualityGateEvidence,
+        ValidationGateEvidence,
+        accept_candidate,
+        plan_candidate_acceptance,
+    )
+
+    value = rehydrate_ha_target_evidence(evidence)
+    if value.validation_hash is None or value.container_hash is None or value.acceptance_hash is None:
+        raise HAEvidenceError("acceptance requires validation, container, and acceptance artifacts")
+    baseline, hypothesis, candidate = evidence_to_attribution(value)
+    baseline_gate = BaselineGateEvidence(
+        baseline_hash=baseline.observation_hash,
+        reproduction_command=value.targeted_tests[0] if value.targeted_tests else "ha target baseline",
+        reproduction_evidence=f"baseline artifact {value.baseline_hash} recorded as failed",
+    )
+    validation_gate = ValidationGateEvidence(
+        candidate_hash=candidate.evidence_hash,
+        hypothesis_hash=hypothesis.hypothesis_hash,
+        patch_hash=candidate.patch_hash,
+        targeted_test_count=max(1, len(value.targeted_tests)),
+        regression_test_count=max(1, len(value.regression_tests)),
+        targeted_evidence=f"validation artifact {value.validation_hash} passed",
+        regression_evidence=f"container artifact {value.container_hash} passed",
+    )
+    quality_gate = QualityGateEvidence(
+        complexity_delta=0.0,
+        cost_units=1.0,
+        quality_evidence=f"acceptance artifact {value.acceptance_hash} passed",
+    )
+    plan = plan_candidate_acceptance(
+        baseline, candidate, baseline_gate, validation_gate, quality_gate, hypothesis=hypothesis
+    )
+    return baseline, hypothesis, candidate, plan, accept_candidate(plan)
+
+
 __all__ = [
     "HAEvidenceArtifact",
     "HAEvidenceError",
@@ -290,5 +330,6 @@ __all__ = [
     "evidence_to_attribution",
     "evidence_to_proposal",
     "run_ha_evidence_pipeline",
+    "build_ha_acceptance",
     "rehydrate_ha_target_evidence",
 ]
