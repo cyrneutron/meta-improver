@@ -92,6 +92,7 @@ def target_proof(request_value: TargetPublicationRequest):
         result((request_value.expected_origin + "\n").encode()),
         result(b""),
         result(b""),
+        result((request_value.accepted_commit + "\n").encode()),
     ]
 
 
@@ -124,14 +125,14 @@ def test_publish_creates_deterministic_ref_pr_and_success_receipt(tmp_path: Path
     assert receipt.pr_number == 19
     assert receipt.checks == [RequiredCheck(name="typecheck", state="SUCCESS", link="https://github.com/run/1")]
     assert rehydrate_target_publication(receipt) == receipt
-    assert all(call[1]["env"] == {} for call in transport.calls[:3])
-    assert all(call[1]["env"] == {"HOME": str(tmp_path)} for call in transport.calls[3:])
+    assert all(call[1]["env"] == {} for call in transport.calls[:4])
+    assert all(call[1]["env"] == {"HOME": str(tmp_path)} for call in transport.calls[4:])
     assert all(call[1]["cwd"] == tmp_path for call in transport.calls)
-    assert transport.calls[3][0][1:] == [
+    assert transport.calls[4][0][1:] == [
         "api",
         f"repos/{REPOSITORY}/git/ref/heads/{value.head_branch}",
     ]
-    assert transport.calls[4][0][1:] == [
+    assert transport.calls[5][0][1:] == [
         "api",
         "--method",
         "POST",
@@ -161,6 +162,7 @@ def test_publish_reuses_matching_pr_and_appends_receipt_to_ledger(tmp_path: Path
             *target_proof(value),
             result(existing),
             result([matching_pr]),
+            result({**matching_pr, "state": "OPEN"}),
             result([{"name": "required", "state": "SUCCESS", "link": "https://github.com/run/1"}]),
         ]
     )
@@ -204,7 +206,7 @@ def test_publish_rejects_unknown_branch_lookup_error_before_ref_creation(tmp_pat
 
     assert receipt.status is TargetPublicationStatus.REJECTED
     assert "branch existence" in receipt.reason
-    assert len(transport.calls) == 4
+    assert len(transport.calls) == 5
     assert all("--method" not in call[0] for call in transport.calls)
 
 
@@ -234,6 +236,7 @@ def test_publish_never_accepts_non_successful_required_checks(tmp_path: Path, st
             *target_proof(value),
             result({"object": {"sha": COMMIT}}),
             result([matching_pr]),
+            result({**matching_pr, "state": "OPEN"}),
             *check_responses,
         ]
     )
@@ -287,6 +290,47 @@ def test_request_and_receipt_reject_unsafe_or_unbound_values():
             reason="rejected",
             observed_at="2026-09-04T00:00:00Z",
         )
+
+
+def test_success_receipt_requires_bound_request_and_poll(tmp_path: Path):
+    value = request()
+    with pytest.raises(ValueError, match="request_hash"):
+        TargetPublicationReceipt(
+            status=TargetPublicationStatus.SUCCEEDED,
+            request_hash="sha256:" + "0" * 64,
+            repository=value.repository,
+            target_task_id=value.target_task_id,
+            accepted_execution_id=value.accepted_execution_id,
+            accepted_commit=value.accepted_commit,
+            head_branch=value.head_branch,
+            pr_number=1,
+            pr_url=f"https://github.com/{value.repository}/pull/1",
+            checks=[RequiredCheck(name="required", state="SUCCESS")],
+            poll_attempts=1,
+            observed_at="2026-09-04T00:00:00Z",
+        )
+
+
+def test_required_check_query_nonzero_is_rejected(tmp_path: Path):
+    value = request()
+    matching_pr = {
+        "number": 19,
+        "url": f"https://github.com/{REPOSITORY}/pull/19",
+        "headRefName": value.head_branch,
+        "baseRefName": "main",
+        "headRefOid": COMMIT,
+    }
+    transport = FixtureTransport(
+        [
+            *target_proof(value),
+            result({"object": {"sha": COMMIT}}),
+            result([matching_pr]),
+            result({**matching_pr, "state": "OPEN"}),
+            result([{"name": "required", "state": "SUCCESS"}], code=1, stderr=b"auth failure"),
+        ]
+    )
+    receipt = TargetPublisher(config(tmp_path), transport).publish(tmp_path, value)
+    assert receipt.status is TargetPublicationStatus.REJECTED
     with pytest.raises(ValueError, match="URL is not bound"):
         TargetPublicationReceipt(
             status=TargetPublicationStatus.REJECTED,

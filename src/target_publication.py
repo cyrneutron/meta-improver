@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Mapping, Protocol, Sequence
+from typing import Any, Literal, Mapping, Protocol, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -145,7 +145,18 @@ class TargetPublicationRequest(BaseModel):
 
     @property
     def request_hash(self) -> str:
-        return _digest(self.model_dump(mode="json"))
+        return _digest(self.binding_material)
+
+    @property
+    def binding_material(self) -> dict[str, Any]:
+        return {
+            "repository": self.repository,
+            "target_task_id": self.target_task_id,
+            "accepted_execution_id": self.accepted_execution_id,
+            "accepted_commit": self.accepted_commit,
+            "base_branch": self.base_branch,
+            "head_branch": self.head_branch,
+        }
 
 
 class RequiredCheck(BaseModel):
@@ -176,7 +187,14 @@ class RequiredCheck(BaseModel):
     def link_is_safe(cls, value: str | None) -> str | None:
         if value is None:
             return None
-        if not isinstance(value, str) or len(value) > 500 or not value.startswith("https://github.com/"):
+        if (
+            not isinstance(value, str)
+            or len(value) > 500
+            or "\r" in value
+            or "\n" in value
+            or not value.startswith("https://github.com/")
+            or _SECRET.search(value)
+        ):
             raise ValueError("check link must be a bounded GitHub HTTPS URL")
         return value
 
@@ -186,7 +204,7 @@ class TargetPublicationReceipt(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_: str = Field(
+    schema_: Literal["target-publication-receipt/v1"] = Field(
         default="target-publication-receipt/v1", alias="schema", serialization_alias="schema"
     )
     status: TargetPublicationStatus
@@ -267,12 +285,26 @@ class TargetPublicationReceipt(BaseModel):
         if self.status is TargetPublicationStatus.SUCCEEDED:
             if self.pr_number is None or self.pr_url is None or not self.checks:
                 raise ValueError("successful publication requires a pull request and required checks")
+            if self.poll_attempts < 1:
+                raise ValueError("successful publication requires a completed check poll")
             if any(check.state != "SUCCESS" for check in self.checks):
                 raise ValueError("successful publication requires all required checks to succeed")
             if self.reason:
                 raise ValueError("successful publication cannot have a rejection reason")
         elif not self.reason:
             raise ValueError("non-successful publication requires a reason")
+        expected_request_hash = _digest(
+            {
+                "repository": self.repository,
+                "target_task_id": self.target_task_id,
+                "accepted_execution_id": self.accepted_execution_id,
+                "accepted_commit": self.accepted_commit,
+                "base_branch": self.base_branch,
+                "head_branch": self.head_branch,
+            }
+        )
+        if self.request_hash != expected_request_hash:
+            raise ValueError("request_hash is not bound to publication request fields")
         expected = _digest(self.model_dump(mode="json", by_alias=True, exclude={"receipt_hash"}))
         if self.receipt_hash is not None and self.receipt_hash != expected:
             raise ValueError("receipt_hash does not match canonical contents")
@@ -442,6 +474,9 @@ class TargetPublisher:
         if status.stdout.strip():
             raise TargetPublicationError("target worktree has tracked changes")
         self._git(target_root, "cat-file", "-e", f"{request.accepted_commit}^{{commit}}")
+        head = self._git(target_root, "rev-parse", "HEAD").stdout.decode("utf-8", errors="replace").strip()
+        if head != request.accepted_commit:
+            raise TargetPublicationError("target HEAD is not the accepted commit")
 
     def _ensure_head_ref(self, target_root: Path, request: TargetPublicationRequest) -> None:
         existing = self._optional_gh_json(
@@ -474,6 +509,7 @@ class TargetPublisher:
         if len(matches) > 1:
             raise TargetPublicationError("multiple open pull requests match the deterministic branch")
         if matches:
+            self._validate_pull_request(target_root, request, matches[0])
             return matches[0]
         result = self._run(
             target_root,
@@ -594,7 +630,6 @@ class TargetPublisher:
                 "--required",
                 "--json",
                 "name,state,link",
-                allow_failure=True,
             )
             if not isinstance(payload, list):
                 return self._receipt(
@@ -698,18 +733,23 @@ class TargetPublisher:
             env={"HOME": str(self.config.github_home)},
         )
         payload = self._decode_json(result, "GitHub CLI")
-        if result.exit_code != 0 and not allow_failure:
+        if result.exit_code != 0:
             raise TargetPublicationError("GitHub CLI request was rejected")
         return payload
 
     def _run(self, cwd: Path, argv: list[str], *, env: Mapping[str, str]) -> ProcessResult:
-        return self.transport.run(
-            argv,
-            cwd=cwd,
-            env=env,
-            timeout_seconds=self.config.timeout_seconds,
-            max_output_bytes=self.config.max_output_bytes,
-        )
+        try:
+            return self.transport.run(
+                argv,
+                cwd=cwd,
+                env=env,
+                timeout_seconds=self.config.timeout_seconds,
+                max_output_bytes=self.config.max_output_bytes,
+            )
+        except TargetPublicationError:
+            raise
+        except OSError as exc:
+            raise TargetPublicationError("publication command could not be started") from exc
 
     @staticmethod
     def _decode_json(result: ProcessResult, label: str) -> Any:
