@@ -24,6 +24,7 @@ class HaCliStatus(StrEnum):
     SUCCEEDED = "succeeded"
     REJECTED = "rejected"
     UNSUPPORTED = "unsupported"
+    INDETERMINATE = "indeterminate"
 
 
 class HaCliConfig(BaseModel):
@@ -384,14 +385,14 @@ class HaCliAdapter:
         if latest is None:
             raise HaCliError("squad status polling deadline exceeded before first observation")
         return HaCliStatusPollReceipt(
-            status=HaCliStatus.REJECTED,
+            status=HaCliStatus.INDETERMINATE,
             command=latest.command,
             provider_version=latest.provider_version,
             provider_build_id=latest.provider_build_id,
             exit_code=latest.exit_code,
             receipt=latest.receipt,
             stderr=latest.stderr,
-            reason="squad status polling deadline or attempt bound exceeded",
+            reason="squad status polling deadline or attempt bound exceeded before a terminal state was observed",
             run_id=run_id,
             attempts=len(observations),
             terminal=False,

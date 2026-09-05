@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from src.ha_cli import HaCliAdapter, HaCliConfig, ProcessResult
+from src.ha_cli import HaCliAdapter, HaCliConfig, HaCliStatus, HaCliStatusPollReceipt, ProcessResult
 from src.ha_diagnosis import (
     HaDiagnosisError,
     HaDiagnosisStatus,
@@ -239,3 +239,42 @@ def test_nonconverged_provider_diagnosis_creates_only_a_captured_attempt(
         AttemptStage.CAPTURED,
         AttemptStage.CAPTURED,
     ]
+
+
+def test_bounded_polling_diagnosis_remains_indeterminate_and_retryable(tmp_path: Path) -> None:
+    poll = HaCliStatusPollReceipt(
+        status=HaCliStatus.INDETERMINATE,
+        command=["squad", "status", "run-1"],
+        provider_version="0.1.0",
+        provider_build_id="build",
+        exit_code=0,
+        receipt={"schema": "command-receipt/v2", "ok": True, "status": "running"},
+        reason="squad status polling deadline or attempt bound exceeded before a terminal state was observed",
+        run_id="run-1",
+        attempts=2,
+        terminal=False,
+        receipts=[{"schema": "command-receipt/v2", "ok": True, "status": "running"}],
+    )
+    from src.ha_diagnosis import normalize_squad_status
+
+    diagnosis = normalize_squad_status(
+        poll,
+        diagnosis_id="diag-indeterminate",
+        squad_id="mi-ha-governance",
+        task_id="task-1",
+        run_id="run-1",
+    )
+    assert diagnosis.status is HaDiagnosisStatus.INDETERMINATE
+    assert diagnosis.reason and "terminal state" in diagnosis.reason
+    ledger = Ledger(tmp_path / "history.db")
+    attempt = record_squad_diagnosis_attempt(
+        ledger,
+        diagnosis,
+        base_commit="a" * 40,
+        strategy_version="ha-diagnosis-v1",
+        model_version="ha-squad/provider-0.1.0",
+        prompt_version="diagnosis-prompt-v1",
+    )
+    assert attempt.status is AttemptStatus.PROPOSED
+    assert attempt.stage is AttemptStage.CAPTURED
+    assert attempt.failure_reason is None
