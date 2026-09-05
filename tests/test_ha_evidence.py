@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from src.ha_evidence import HAEvidenceArtifact, HAEvidenceError, HATargetEvidence, rehydrate_ha_target_evidence
+from src.ha_evidence import HAEvidenceArtifact, HAEvidenceError, HATargetEvidence, evidence_to_attribution, read_ha_target_evidence, rehydrate_ha_target_evidence
 
 
 def _bundle() -> HATargetEvidence:
@@ -39,3 +39,26 @@ def test_optional_artifact_hash_must_match_reference():
 def test_artifact_paths_cannot_escape_canonical_root():
     with pytest.raises(ValueError):
         HAEvidenceArtifact(kind="baseline", path="../baseline.json", digest="sha256:" + "a" * 64)
+
+
+def test_reader_accepts_only_canonical_harness_manifest(tmp_path):
+    manifest = tmp_path / "harness" / "tasks" / "task-1" / "artifacts" / "evidence.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(_bundle().model_dump_json(by_alias=True), encoding="utf-8")
+    assert read_ha_target_evidence(tmp_path, "harness/tasks/task-1/artifacts/evidence.json") == _bundle()
+
+
+def test_reader_rejects_projection_and_escape(tmp_path):
+    with pytest.raises(HAEvidenceError):
+        read_ha_target_evidence(tmp_path, ".harness/evidence.json")
+    outside = tmp_path / "outside.json"
+    outside.write_text("{}", encoding="utf-8")
+    with pytest.raises(HAEvidenceError):
+        read_ha_target_evidence(tmp_path, "harness/../outside.json")
+
+
+def test_verified_evidence_maps_to_attribution_contracts():
+    baseline, hypothesis, candidate = evidence_to_attribution(_bundle())
+    assert baseline.base_commit == "a" * 40
+    assert hypothesis.baseline_hash == baseline.observation_hash
+    assert candidate.hypothesis_hash == hypothesis.hypothesis_hash

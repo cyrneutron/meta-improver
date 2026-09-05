@@ -11,9 +11,12 @@ import hashlib
 import json
 import re
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from src.attribution import AttributionHypothesis, BaselineObservation, CandidateChangeEvidence
 
 
 _HASH = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -75,6 +78,12 @@ class HATargetEvidence(BaseModel):
     validation_hash: str | None = Field(default=None, pattern=_HASH.pattern)
     container_hash: str | None = Field(default=None, pattern=_HASH.pattern)
     acceptance_hash: str | None = Field(default=None, pattern=_HASH.pattern)
+    targeted_tests: list[str] = Field(default_factory=list, max_length=200)
+    regression_tests: list[str] = Field(default_factory=list, max_length=200)
+    model_version: str = "ha-evidence-model"
+    prompt_version: str = "ha-evidence-prompt"
+    signal: str = "ha-target-evidence"
+    summary: str = "HA target improvement evidence"
     observed_at: datetime
     evidence_hash: str | None = Field(default=None, pattern=_HASH.pattern)
 
@@ -82,6 +91,20 @@ class HATargetEvidence(BaseModel):
     @classmethod
     def identities_are_safe(cls, value: str, info: Any) -> str:
         return _safe(value, info.field_name, _IDENTITY, 200)
+
+    @field_validator("signal", "summary", "model_version", "prompt_version")
+    @classmethod
+    def bounded_text(cls, value: str, info: Any) -> str:
+        if not isinstance(value, str) or not value.strip() or len(value) > 2_000 or _CONTROL.search(value):
+            raise ValueError(f"{info.field_name} is invalid")
+        return value
+
+    @field_validator("targeted_tests", "regression_tests")
+    @classmethod
+    def bounded_tests(cls, values: list[str]) -> list[str]:
+        if any(not isinstance(value, str) or not value.strip() or len(value) > 500 or _CONTROL.search(value) for value in values):
+            raise ValueError("test commands are invalid")
+        return values
 
     @field_validator("observed_at")
     @classmethod
@@ -106,6 +129,48 @@ class HATargetEvidence(BaseModel):
         return self
 
 
+def _manifest_path(repo_root: str | Path, relative: str) -> Path:
+    root = Path(repo_root).resolve()
+    if not isinstance(relative, str) or not relative.startswith("harness/") or relative.startswith(("/", "~")):
+        raise HAEvidenceError("evidence manifest must be a relative harness path")
+    path = (root / relative).resolve()
+    harness = (root / "harness").resolve()
+    try:
+        path.relative_to(harness)
+    except ValueError as exc:
+        raise HAEvidenceError("evidence manifest escapes canonical harness") from exc
+    if path.is_symlink() or not path.is_file():
+        raise HAEvidenceError("evidence manifest is missing or not regular")
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise HAEvidenceError("evidence manifest cannot be read") from exc
+    if len(raw.encode("utf-8")) > 200_000:
+        raise HAEvidenceError("evidence manifest exceeds bounded size")
+    return path
+
+
+def read_ha_target_evidence(
+    repo_root: str | Path,
+    manifest_path: str,
+) -> HATargetEvidence:
+    """Read one hash-bound evidence manifest from canonical ``harness/`` only."""
+
+    path = _manifest_path(repo_root, manifest_path)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise HAEvidenceError("evidence manifest is not valid JSON") from exc
+    if not isinstance(payload, dict):
+        raise HAEvidenceError("evidence manifest must be a JSON object")
+    try:
+        return rehydrate_ha_target_evidence(HATargetEvidence.model_validate(payload))
+    except Exception as exc:
+        if isinstance(exc, HAEvidenceError):
+            raise
+        raise HAEvidenceError("evidence manifest failed contract validation") from exc
+
+
 def rehydrate_ha_target_evidence(value: HATargetEvidence) -> HATargetEvidence:
     if value.evidence_hash is None:
         raise HAEvidenceError("cannot use unhashed HA target evidence")
@@ -118,4 +183,46 @@ def rehydrate_ha_target_evidence(value: HATargetEvidence) -> HATargetEvidence:
     return hydrated
 
 
-__all__ = ["HAEvidenceArtifact", "HAEvidenceError", "HATargetEvidence", "rehydrate_ha_target_evidence"]
+def evidence_to_attribution(
+    evidence: HATargetEvidence,
+) -> tuple[BaselineObservation, AttributionHypothesis, CandidateChangeEvidence]:
+    """Map verified HA identities into MI attribution contracts."""
+
+    value = rehydrate_ha_target_evidence(evidence)
+    baseline = BaselineObservation(
+        attempt_id=value.execution_id,
+        signal_signature=value.signal,
+        base_commit=value.base_commit,
+        passed=False,
+        command=value.targeted_tests[0] if value.targeted_tests else "ha target baseline",
+        summary=value.summary,
+        observed_at=value.observed_at,
+    )
+    hypothesis = AttributionHypothesis(
+        baseline_hash=baseline.observation_hash,
+        category="ha-target",
+        confidence=1.0,
+        root_cause="HA evidence bundle requires candidate validation",
+        affected_paths=[artifact.path for artifact in value.artifacts if artifact.kind == "diff"],
+        model_version=value.model_version,
+        prompt_version=value.prompt_version,
+    )
+    candidate = CandidateChangeEvidence(
+        hypothesis_hash=hypothesis.hypothesis_hash,
+        baseline_hash=baseline.observation_hash,
+        patch_hash=value.diff_hash or value.baseline_hash,
+        targeted_tests=value.targeted_tests or ["ha target targeted validation"],
+        regression_tests=value.regression_tests or ["ha target regression validation"],
+        residual_risk="HA evidence bundle supplied by canonical target artifacts",
+    )
+    return baseline, hypothesis, candidate
+
+
+__all__ = [
+    "HAEvidenceArtifact",
+    "HAEvidenceError",
+    "HATargetEvidence",
+    "read_ha_target_evidence",
+    "evidence_to_attribution",
+    "rehydrate_ha_target_evidence",
+]
