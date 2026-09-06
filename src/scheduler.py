@@ -258,6 +258,7 @@ class InMemoryDispatchCoordinator:
         *,
         approval: ApprovalInput | None = None,
         approval_scope: ApprovalScope | str | None = None,
+        actor_id: str | None = None,
         failure_threshold: int = 3,
         base_backoff_seconds: float = 1.0,
         max_backoff_seconds: float = 300.0,
@@ -275,6 +276,7 @@ class InMemoryDispatchCoordinator:
                 raise ValueError("approval and approval_scope conflict")
             approval = selected_scope
         self.approval = approval
+        self.actor_id = None if actor_id is None else _safe_identity(actor_id, "actor_id")
         self.failure_threshold = failure_threshold
         self.base_backoff_seconds = float(base_backoff_seconds)
         self.max_backoff_seconds = float(max_backoff_seconds)
@@ -314,6 +316,8 @@ class InMemoryDispatchCoordinator:
         approval: ApprovalInput | None,
         proposal_plan: ProposalPlan | None,
         now: datetime,
+        actor_id: str | None = None,
+        review_digest: str | None = None,
     ) -> None:
         hydrated_plan: ProposalPlan | None = None
         if proposal_plan is not None:
@@ -341,10 +345,16 @@ class InMemoryDispatchCoordinator:
                     raise SchedulerError("approval token is bound to a different proposal plan")
                 if token.scope.value != request.action.value:
                     raise SchedulerError("approval scope does not match action")
-                if hydrated_plan is not None:
-                    authorize_action(hydrated_plan, ProposalAction(request.action.value), token, now=now)
-                elif not (token.approved_at <= now < token.expires_at):
-                    raise SchedulerError("approval token is expired or not yet valid")
+                if hydrated_plan is None:
+                    raise SchedulerError("consent-bound approval requires the proposal plan")
+                authorize_action(
+                    hydrated_plan,
+                    ProposalAction(request.action.value),
+                    token,
+                    approver_id=actor_id if actor_id is not None else self.actor_id,
+                    review_digest=review_digest,
+                    now=now,
+                )
                 return
             raise SchedulerError(
                 f"{request.action.value} requires a complete approval token"
@@ -361,6 +371,8 @@ class InMemoryDispatchCoordinator:
         approval: ApprovalInput | None = None,
         approval_scope: ApprovalScope | str | None = None,
         proposal_plan: ProposalPlan | None = None,
+        actor_id: str | None = None,
+        review_digest: str | None = None,
         now: datetime | None = None,
     ) -> DispatchReceipt:
         request = rehydrate_dispatch_request(request)
@@ -386,7 +398,14 @@ class InMemoryDispatchCoordinator:
                     # A retry after the bounded window creates a new active
                     # reservation while retaining the failure count.
                     try:
-                        self._authorization(request, approval, proposal_plan, current)
+                        self._authorization(
+                            request,
+                            approval,
+                            proposal_plan,
+                            current,
+                            actor_id=actor_id,
+                            review_digest=review_digest,
+                        )
                     except SchedulerError as exc:
                         return _copy_receipt(self._receipt(request, DispatchStatus.REJECTED, reason=str(exc)))
                     retried = self._receipt(
@@ -418,7 +437,14 @@ class InMemoryDispatchCoordinator:
                     return _copy_receipt(self._receipt(request, DispatchStatus.REJECTED, reason="dispatch key conflicts with an active lock"))
                 return _copy_receipt(self._receipt(request, DispatchStatus.LOCKED, reason="dispatch key is already locked"))
             try:
-                self._authorization(request, approval, proposal_plan, current)
+                self._authorization(
+                    request,
+                    approval,
+                    proposal_plan,
+                    current,
+                    actor_id=actor_id,
+                    review_digest=review_digest,
+                )
             except SchedulerError as exc:
                 return _copy_receipt(self._receipt(request, DispatchStatus.REJECTED, reason=str(exc)))
             accepted = self._receipt(request, DispatchStatus.ACCEPTED, reason="dispatch accepted")
