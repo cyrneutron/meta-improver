@@ -143,6 +143,25 @@ lifecycle:
     assert context.package_path == f"tasks/{package.name}"
 
 
+def test_task_context_rejects_explicit_null_migrated_index_package_path(tmp_path) -> None:
+    index = f'''---
+schema: task-package/v2
+task_id: {TASK_ID}
+title: "Fixture task"
+lifecycle:
+  engine: migration-import/v1
+  status: active
+packagePath: null
+---
+# Fixture task
+'''
+
+    _task_fixture(tmp_path, index=index)
+
+    with pytest.raises(HAAdapterError, match="INDEX package path mismatch"):
+        read_task_context(tmp_path, TASK_ID)
+
+
 @pytest.mark.parametrize(
     "index",
     [
