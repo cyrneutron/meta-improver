@@ -12,6 +12,8 @@ from src.acceptance import (
     ValidationGateEvidence,
     accept_candidate,
     plan_candidate_acceptance,
+    CandidateAcceptanceAdmission,
+    rehydrate_candidate_acceptance_admission,
     rehydrate_candidate_acceptance_plan,
     rehydrate_candidate_acceptance_receipt,
 )
@@ -207,3 +209,28 @@ def test_receipt_rehydrates_before_trusting_mutable_plan() -> None:
     object.__setattr__(receipt.acceptance_plan.quality_gate, "quality_evidence", "mutated")
     with pytest.raises(AcceptanceError, match="receipt"):
         rehydrate_candidate_acceptance_receipt(receipt)
+
+
+def test_typed_publication_admission_is_hash_bound(tmp_path) -> None:
+    plan, _, _, _ = _plan()
+    receipt = accept_candidate(plan)
+    admission = CandidateAcceptanceAdmission(
+        acceptance_receipt=receipt,
+        repository="cyrneutron/harness-anything",
+        target_task_id="task-publication",
+        accepted_execution_id="exe-publication",
+        accepted_commit="a" * 40,
+        target_root=tmp_path,
+        expected_remote="https://github.com/cyrneutron/harness-anything.git",
+    )
+    assert rehydrate_candidate_acceptance_admission(admission) == admission
+    with pytest.raises(ValueError, match="expected_remote"):
+        CandidateAcceptanceAdmission(
+            acceptance_receipt=receipt,
+            repository="cyrneutron/harness-anything",
+            target_task_id="task-publication",
+            accepted_execution_id="exe-publication",
+            accepted_commit="a" * 40,
+            target_root=tmp_path,
+            expected_remote="https://github.com/other/repo.git",
+        )

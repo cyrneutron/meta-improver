@@ -405,4 +405,4 @@ def test_cli_returns_nonzero_for_non_success_receipt(tmp_path: Path, monkeypatch
 
     assert result_value.exit_code == 1
     payload = json.loads(result_value.stdout)
-    assert payload.get("status") == TargetPublicationStatus.PENDING.value, payload
+    assert "admission-file" in payload["error"]
