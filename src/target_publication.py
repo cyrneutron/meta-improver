@@ -10,10 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
-import selectors
-import subprocess
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -25,6 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from src.acceptance import CandidateAcceptanceAdmission, rehydrate_candidate_acceptance_admission
 from src.ha_cli import ProcessResult
+from src.process import BoundedProcessError, run_bounded_process
 
 
 _REPOSITORY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,38}/[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$")
@@ -427,49 +425,13 @@ class SubprocessPublicationTransport:
         timeout_seconds: float,
         max_output_bytes: int,
     ) -> ProcessResult:
-        process = subprocess.Popen(
-            list(argv),
-            cwd=cwd,
-            env=dict(env),
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            shell=False,
-        )
-        assert process.stdout is not None and process.stderr is not None
-        selector = selectors.DefaultSelector()
-        selector.register(process.stdout, selectors.EVENT_READ, "stdout")
-        selector.register(process.stderr, selectors.EVENT_READ, "stderr")
-        chunks: dict[str, list[bytes]] = {"stdout": [], "stderr": []}
-        size = 0
-        deadline = time.monotonic() + timeout_seconds
         try:
-            while selector.get_map():
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise TargetPublicationError("publication command timed out")
-                for key, _ in selector.select(remaining):
-                    data = os.read(key.fileobj.fileno(), min(65_536, max_output_bytes + 1))
-                    if not data:
-                        selector.unregister(key.fileobj)
-                        continue
-                    size += len(data)
-                    if size > max_output_bytes:
-                        raise TargetPublicationError("publication command output limit exceeded")
-                    chunks[key.data].append(data)
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise TargetPublicationError("publication command timed out")
-            exit_code = process.wait(timeout=remaining)
-        except (subprocess.TimeoutExpired, TargetPublicationError) as exc:
-            process.kill()
-            process.wait()
-            if isinstance(exc, TargetPublicationError):
-                raise
-            raise TargetPublicationError("publication command timed out") from exc
-        finally:
-            selector.close()
-        return ProcessResult(exit_code, b"".join(chunks["stdout"]), b"".join(chunks["stderr"]))
+            return ProcessResult(*run_bounded_process(
+                argv, cwd=cwd, env=env, timeout_seconds=timeout_seconds,
+                max_output_bytes=max_output_bytes,
+            ))
+        except BoundedProcessError as exc:
+            raise TargetPublicationError(f"publication command {exc}") from exc
 
 
 class TargetPublicationConfig(BaseModel):

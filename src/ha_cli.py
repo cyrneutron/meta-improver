@@ -3,10 +3,7 @@
 from __future__ import annotations
 
 import json
-import os
 import re
-import selectors
-import subprocess
 import time
 from dataclasses import dataclass
 from enum import StrEnum
@@ -14,6 +11,8 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Mapping, Protocol, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field
+
+from src.process import BoundedProcessError, run_bounded_process
 
 
 class HaCliError(RuntimeError):
@@ -72,44 +71,13 @@ class SubprocessTransport:
         timeout_seconds: float,
         max_output_bytes: int,
     ) -> ProcessResult:
-        process = subprocess.Popen(
-            list(argv), cwd=cwd, env=dict(env), stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=False,
-        )
-        assert process.stdout is not None and process.stderr is not None
-        selector = selectors.DefaultSelector()
-        selector.register(process.stdout, selectors.EVENT_READ, "stdout")
-        selector.register(process.stderr, selectors.EVENT_READ, "stderr")
-        chunks: dict[str, list[bytes]] = {"stdout": [], "stderr": []}
-        size = 0
-        deadline = time.monotonic() + timeout_seconds
         try:
-            while selector.get_map():
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise HaCliError("HA CLI timed out")
-                for key, _ in selector.select(remaining):
-                    data = os.read(key.fileobj.fileno(), min(65_536, max_output_bytes + 1))
-                    if not data:
-                        selector.unregister(key.fileobj)
-                        continue
-                    size += len(data)
-                    if size > max_output_bytes:
-                        raise HaCliError("HA CLI output limit exceeded")
-                    chunks[key.data].append(data)
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise HaCliError("HA CLI timed out")
-            exit_code = process.wait(timeout=remaining)
-        except (subprocess.TimeoutExpired, HaCliError) as exc:
-            process.kill()
-            process.wait()
-            if isinstance(exc, HaCliError):
-                raise
-            raise HaCliError("HA CLI timed out") from exc
-        finally:
-            selector.close()
-        return ProcessResult(exit_code, b"".join(chunks["stdout"]), b"".join(chunks["stderr"]))
+            return ProcessResult(*run_bounded_process(
+                argv, cwd=cwd, env=env, timeout_seconds=timeout_seconds,
+                max_output_bytes=max_output_bytes,
+            ))
+        except BoundedProcessError as exc:
+            raise HaCliError(f"HA CLI {exc}") from exc
 
 
 class HaCliReceipt(BaseModel):

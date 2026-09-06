@@ -313,15 +313,27 @@ def test_task_context_rejects_missing_and_oversized_documents(tmp_path) -> None:
         read_task_context(tmp_path / "large", TASK_ID, max_text=100)
 
 
-def test_task_context_rejects_path_escape_and_symlink(tmp_path) -> None:
+def test_task_context_rejects_path_escape(tmp_path) -> None:
     _task_fixture(tmp_path)
     with pytest.raises(HAAdapterError):
         read_task_context(tmp_path, "task_../escape")
 
+
+def _symlink(link, target, *, directory=False):
+    try:
+        link.symlink_to(target, target_is_directory=directory)
+    except OSError as exc:
+        if getattr(exc, "winerror", None) == 1314:
+            pytest.skip("Windows symlink privilege is unavailable")
+        raise
+
+
+def test_task_context_rejects_symlink(tmp_path) -> None:
+    _task_fixture(tmp_path)
     outside = tmp_path / "outside"
     outside.mkdir()
     target = tmp_path / "harness" / "tasks" / f"{TASK_ID}-escape"
-    target.symlink_to(outside, target_is_directory=True)
+    _symlink(target, outside, directory=True)
     with pytest.raises(HAAdapterError):
         read_task_context(tmp_path, TASK_ID)
 
@@ -562,7 +574,7 @@ def test_fact_and_decision_context_reject_path_escape_and_symlink(tmp_path) -> N
     _fact_fixture(tmp_path)
     outside = tmp_path / "outside.md"
     outside.write_text("# Facts\n", encoding="utf-8")
-    (tmp_path / "harness/facts/F-BBBB2222.md").symlink_to(outside)
+    _symlink(tmp_path / "harness/facts/F-BBBB2222.md", outside)
     with pytest.raises(HAAdapterError):
         read_fact_context(tmp_path)
 
@@ -570,7 +582,7 @@ def test_fact_and_decision_context_reject_path_escape_and_symlink(tmp_path) -> N
     _decision_fixture(decision_root)
     outside_dir = decision_root / "outside"
     outside_dir.mkdir()
-    (decision_root / "harness/decisions/decision-dec_escape").symlink_to(outside_dir, target_is_directory=True)
+    _symlink(decision_root / "harness/decisions/decision-dec_escape", outside_dir, directory=True)
     with pytest.raises(HAAdapterError):
         read_decision_context(decision_root)
 
