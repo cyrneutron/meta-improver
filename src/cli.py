@@ -8,7 +8,7 @@ from typing import Annotated
 
 import typer
 
-from src.ha_cli import HaCliAdapter, HaCliConfig, HaCliError
+from src.ha_cli import HaCliAdapter, HaCliConfig, HaCliError, HaCliPermissionMode
 from src.ha_diagnosis import (
     HaDiagnosisError,
     collect_squad_diagnosis,
@@ -95,6 +95,7 @@ def ha_squad_run(
     ] = None,
     daemon_id: Annotated[str, typer.Option()] = "default",
     timeout_seconds: Annotated[float, typer.Option("--timeout-seconds", min=0.001, max=300)] = 30.0,
+    permission_mode: Annotated[HaCliPermissionMode, typer.Option("--permission-mode")] = "read-only",
     version: Annotated[str, typer.Option()] = DEFAULT_HA_CLI_VERSION,
     build_id: Annotated[str, typer.Option()] = DEFAULT_HA_CLI_BUILD_ID,
 ) -> None:
@@ -103,7 +104,7 @@ def ha_squad_run(
         receipt = _adapter(
             executable, cli_entry, build_id_file, version, build_id, daemon_user_root, daemon_id,
             timeout_seconds,
-        ).squad_run(root, squad_id, instance, cwd, task_id, task)
+        ).squad_run(root, squad_id, instance, cwd, task_id, task, permission_mode)
     except HaCliError as exc:
         typer.echo(json.dumps({"ok": False, "error": str(exc)}, sort_keys=True))
         raise typer.Exit(1) from exc
@@ -168,6 +169,7 @@ def ha_squad_diagnose(
     interval_seconds: Annotated[float, typer.Option("--interval-seconds", min=0, max=60)] = 1.0,
     max_attempts: Annotated[int, typer.Option("--max-attempts", min=1, max=1000)] = 30,
     deadline_seconds: Annotated[float, typer.Option("--deadline-seconds", min=0.001, max=300)] = 30.0,
+    permission_mode: Annotated[HaCliPermissionMode, typer.Option("--permission-mode")] = "read-only",
     version: Annotated[str, typer.Option()] = DEFAULT_HA_CLI_VERSION,
     build_id: Annotated[str, typer.Option()] = DEFAULT_HA_CLI_BUILD_ID,
 ) -> None:
@@ -189,6 +191,7 @@ def ha_squad_diagnose(
             interval_seconds=interval_seconds,
             max_attempts=max_attempts,
             deadline_seconds=deadline_seconds,
+            permission_mode=permission_mode,
         )
         attempt = record_squad_diagnosis_attempt(
             Ledger(ledger_path),

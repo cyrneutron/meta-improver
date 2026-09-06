@@ -90,7 +90,7 @@ def test_squad_run_uses_fixed_argv_and_repository_relative_cwd(tmp_path: Path) -
     )
     assert receipt.status is HaCliStatus.SUCCEEDED
     assert transport.calls[1][0][-14:] == [
-        "squad", "run", "squad-1", "--instance", "instance-1", "--cwd", "src/work", "--permission-mode", "bypass", "--task", "task-1", "--prompt", "prompt-1", "--json"
+        "squad", "run", "squad-1", "--instance", "instance-1", "--cwd", "src/work", "--permission-mode", "read-only", "--task", "task-1", "--prompt", "prompt-1", "--json"
     ]
     assert transport.calls[1][1]["env"] == {}
 
@@ -110,6 +110,23 @@ def test_squad_run_accepts_async_running_receipt_with_run_id(tmp_path: Path) -> 
     )
     assert receipt.status is HaCliStatus.SUCCEEDED
     assert receipt.receipt and receipt.receipt["squadRunId"] == "run-1"
+
+
+def test_squad_run_allows_only_explicit_contracted_permission_modes(tmp_path: Path) -> None:
+    transport = FixtureTransport([
+        {"ok": True, "command": "version", "version": "0.1.0"},
+        {"schema": "command-receipt/v2", "ok": True, "command": "squad-run", "runId": "run-1"},
+    ])
+    receipt = HaCliAdapter(_config(tmp_path), transport).squad_run(
+        tmp_path, "squad-1", "instance-1", ".", "task-1", "prompt-1", "bypass"
+    )
+    assert receipt.status is HaCliStatus.SUCCEEDED
+    assert "bypass" in transport.calls[1][0]
+
+    rejected = HaCliAdapter(
+        _config(tmp_path), FixtureTransport([{"ok": True, "command": "version", "version": "0.1.0"}])
+    ).squad_run(tmp_path, "squad-1", "instance-1", ".", "task-1", "prompt-1", "unsafe")
+    assert rejected.status is HaCliStatus.UNSUPPORTED
 
 
 @pytest.mark.parametrize("cwd", ["/tmp/outside", "../outside", "src/../outside", "C:\\tmp\\outside"])
@@ -411,6 +428,8 @@ def test_cli_squad_diagnose_records_diagnosis_attempt_without_real_provider(
     assert payload["diagnosis"]["diagnosis_id"] == "diag-1"
     assert payload["attempt"]["status"] == AttemptStatus.PROPOSED.value
     assert payload["attempt"]["stage"] == AttemptStage.CAPTURED.value
+    assert "--permission-mode" in transport.calls[1][0]
+    assert "read-only" in transport.calls[1][0]
     attempt = Ledger(ledger_path).get_attempt(payload["attempt"]["attempt_id"])
     assert attempt is not None
     assert attempt.source_diagnosis_id == "diag-1"

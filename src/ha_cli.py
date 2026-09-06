@@ -11,7 +11,7 @@ import time
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
-from typing import Any, Mapping, Protocol, Sequence
+from typing import Any, Literal, Mapping, Protocol, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -25,6 +25,9 @@ class HaCliStatus(StrEnum):
     REJECTED = "rejected"
     UNSUPPORTED = "unsupported"
     INDETERMINATE = "indeterminate"
+
+
+HaCliPermissionMode = Literal["bypass", "workspace-write", "read-only"]
 
 
 class HaCliConfig(BaseModel):
@@ -252,7 +255,7 @@ class HaCliAdapter:
                 or parts[5] != "--cwd"
                 or not _repository_relative(parts[6])
                 or parts[7] != "--permission-mode"
-                or parts[8] != "bypass"
+                or parts[8] not in {"bypass", "workspace-write", "read-only"}
                 or parts[9] != "--task"
                 or not _identifier(parts[10])
                 or parts[11] != "--prompt"
@@ -302,6 +305,7 @@ class HaCliAdapter:
         cwd: str,
         task_id: str,
         task: str,
+        permission_mode: HaCliPermissionMode = "read-only",
     ) -> HaCliReceipt:
         """Submit one fixed, proposal-only squad invocation.
 
@@ -313,7 +317,7 @@ class HaCliAdapter:
             root,
             (
                 "squad", "run", squad_id, "--instance", instance, "--cwd", cwd,
-                "--permission-mode", "bypass", "--task", task_id, "--prompt", task,
+                "--permission-mode", permission_mode, "--task", task_id, "--prompt", task,
             ),
         )
 
