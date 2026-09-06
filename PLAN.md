@@ -10,6 +10,7 @@
 
 - HA `harness/` 文档、canonical events 和任务 artifacts 是真相源；`.harness/` SQLite/HTML 只是可重建投影。
 - MI 默认 proposal-only：只生成报告、patch 和 PR payload；显式批准后才允许 push/create PR，永不自动合入 `main`。
+- 执行节奏采用连续推进：在授权范围内连续完成普通计划步骤；里程碑汇报不构成暂停。仅在权限、外部阻塞、不可逆操作、架构边界或需要用户裁决时停下。
 - Worktree 只提供 Git 隔离。目标代码必须在 Docker/Podman 容器中运行，默认禁网、无 secrets，并设置 CPU/内存/磁盘/时间限制。
 - 每次尝试记录 `base_commit`、输入快照哈希、模型/Prompt 版本、patch 哈希、测试结果、幂等键和回滚点。
 - self-evolve 首阶段只允许离线修改 L1 Prompt/规则；权限、审计、门禁、沙箱和凭据处理属于 immutable policy core。

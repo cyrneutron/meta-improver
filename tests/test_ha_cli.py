@@ -1,5 +1,6 @@
 import json
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -88,8 +89,8 @@ def test_squad_run_uses_fixed_argv_and_repository_relative_cwd(tmp_path: Path) -
         tmp_path, "squad-1", "instance-1", "src/work", "task-1", "prompt-1"
     )
     assert receipt.status is HaCliStatus.SUCCEEDED
-    assert transport.calls[1][0][-12:] == [
-        "squad", "run", "squad-1", "--instance", "instance-1", "--cwd", "src/work", "--task", "task-1", "--prompt", "prompt-1", "--json"
+    assert transport.calls[1][0][-14:] == [
+        "squad", "run", "squad-1", "--instance", "instance-1", "--cwd", "src/work", "--permission-mode", "bypass", "--task", "task-1", "--prompt", "prompt-1", "--json"
     ]
     assert transport.calls[1][1]["env"] == {}
 
@@ -167,9 +168,30 @@ def test_squad_status_poll_is_bounded_by_attempts(tmp_path: Path) -> None:
     receipt = HaCliAdapter(_config(tmp_path), transport).poll_squad_status(
         tmp_path, "run-1", interval_seconds=0, max_attempts=2, deadline_seconds=2
     )
-    assert receipt.status is HaCliStatus.REJECTED
+    assert receipt.status is HaCliStatus.INDETERMINATE
     assert receipt.terminal is False
     assert receipt.reason and "bound" in receipt.reason
+
+
+def test_squad_status_poll_marks_deadline_without_terminal_observation(tmp_path: Path) -> None:
+    class SlowTransport(FixtureTransport):
+        def run(self, argv, **kwargs):
+            time.sleep(0.01)
+            return super().run(argv, **kwargs)
+
+    transport = SlowTransport([
+        {"ok": True, "command": "version", "version": "0.1.0"},
+        {"schema": "command-receipt/v2", "ok": True, "status": "running"},
+        {"ok": True, "command": "version", "version": "0.1.0"},
+        {"schema": "command-receipt/v2", "ok": True, "status": "running"},
+    ])
+    receipt = HaCliAdapter(_config(tmp_path), transport).poll_squad_status(
+        tmp_path, "run-1", interval_seconds=0, max_attempts=2, deadline_seconds=0.05
+    )
+    assert receipt.status is HaCliStatus.INDETERMINATE
+    assert receipt.terminal is False
+    assert receipt.attempts == 2
+    assert len(receipt.receipts) == 2
 
 
 def test_version_and_build_drift_fail_closed(tmp_path: Path) -> None:

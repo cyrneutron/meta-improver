@@ -24,6 +24,7 @@ class HaCliStatus(StrEnum):
     SUCCEEDED = "succeeded"
     REJECTED = "rejected"
     UNSUPPORTED = "unsupported"
+    INDETERMINATE = "indeterminate"
 
 
 class HaCliConfig(BaseModel):
@@ -244,16 +245,18 @@ class HaCliAdapter:
             # Keep this shape deliberately literal.  In particular, callers
             # cannot add provider flags or reorder the four required fields.
             if (
-                len(parts) != 11
+                len(parts) != 13
                 or not _identifier(parts[2])
                 or parts[3] != "--instance"
                 or not _identifier(parts[4])
                 or parts[5] != "--cwd"
                 or not _repository_relative(parts[6])
-                or parts[7] != "--task"
-                or not _identifier(parts[8])
-                or parts[9] != "--prompt"
-                or not _safe_prompt(parts[10])
+                or parts[7] != "--permission-mode"
+                or parts[8] != "bypass"
+                or parts[9] != "--task"
+                or not _identifier(parts[10])
+                or parts[11] != "--prompt"
+                or not _safe_prompt(parts[12])
             ):
                 route = None
         else:
@@ -310,7 +313,7 @@ class HaCliAdapter:
             root,
             (
                 "squad", "run", squad_id, "--instance", instance, "--cwd", cwd,
-                "--task", task_id, "--prompt", task,
+                "--permission-mode", "bypass", "--task", task_id, "--prompt", task,
             ),
         )
 
@@ -382,14 +385,14 @@ class HaCliAdapter:
         if latest is None:
             raise HaCliError("squad status polling deadline exceeded before first observation")
         return HaCliStatusPollReceipt(
-            status=HaCliStatus.REJECTED,
+            status=HaCliStatus.INDETERMINATE,
             command=latest.command,
             provider_version=latest.provider_version,
             provider_build_id=latest.provider_build_id,
             exit_code=latest.exit_code,
             receipt=latest.receipt,
             stderr=latest.stderr,
-            reason="squad status polling deadline or attempt bound exceeded",
+            reason="squad status polling deadline or attempt bound exceeded before a terminal state was observed",
             run_id=run_id,
             attempts=len(observations),
             terminal=False,

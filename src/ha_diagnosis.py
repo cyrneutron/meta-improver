@@ -52,6 +52,7 @@ class HaDiagnosisStatus(StrEnum):
     CONVERGED = "converged"
     REJECTED = "rejected"
     UNSUPPORTED = "unsupported"
+    INDETERMINATE = "indeterminate"
 
 
 class HaDiagnosisFinding(BaseModel):
@@ -244,9 +245,16 @@ def normalize_squad_status(
         and isinstance(decision, dict)
         and decision.get("kind") == "converged"
     )
+    status = (
+        HaDiagnosisStatus.CONVERGED
+        if converged
+        else HaDiagnosisStatus.INDETERMINATE
+        if poll.status is HaCliStatus.INDETERMINATE
+        else HaDiagnosisStatus.REJECTED
+    )
     return HaDiagnosis(
         diagnosis_id=diagnosis_id, task_id=task_id, squad_id=squad_id, run_id=run_id,
-        status=HaDiagnosisStatus.CONVERGED if converged else HaDiagnosisStatus.REJECTED,
+        status=status,
         summary=summary if isinstance(summary, str) else None, findings=findings,
         provider_version=poll.provider_version, provider_build_id=poll.provider_build_id,
         poll_attempts=poll.attempts, receipt_digest=_digest(payload),
@@ -325,6 +333,8 @@ def record_squad_diagnosis_attempt(
     )
     recorded_attempt = ledger.record_attempt(initial)
     if recorded_diagnosis.status is HaDiagnosisStatus.CONVERGED:
+        return recorded_attempt
+    if recorded_diagnosis.status is HaDiagnosisStatus.INDETERMINATE:
         return recorded_attempt
     rejected = Attempt.model_validate(
         {

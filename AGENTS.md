@@ -67,3 +67,10 @@ This file contains stable repository operating rules. Current milestone state an
 ## Repository Specifics
 
 Repository-specific rules may be added here after explicit diagnosis; the deterministic base and vertical overlay above remain unchanged.
+
+## Execution Cadence
+
+- Unless a task explicitly requests checkpoints, continue through all safe, authorized in-scope plan steps in one work cycle.
+- Ordinary milestone completion is a reporting point, not a pause or approval gate.
+- Pause only for permissions, external blockers, irreversible actions, architecture-boundary choices, or required user decisions.
+- End-of-cycle reports summarize cumulative progress and do not imply that work is waiting for confirmation.
