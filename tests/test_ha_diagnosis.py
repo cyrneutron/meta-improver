@@ -9,6 +9,7 @@ from src.ha_diagnosis import (
     HaDiagnosisError,
     HaDiagnosisStatus,
     collect_squad_diagnosis,
+    normalize_squad_status,
     record_squad_diagnosis_attempt,
     rehydrate_diagnosis,
 )
@@ -178,6 +179,71 @@ def test_diagnosis_rehydration_and_ledger_conflict_fail_closed(tmp_path: Path):
             model_version="ha-squad/provider-0.1.0",
             prompt_version="diagnosis-prompt-v1",
         )
+
+
+def test_contradictory_converged_report_is_rejected() -> None:
+    poll = HaCliStatusPollReceipt(
+        status=HaCliStatus.SUCCEEDED,
+        command=["squad", "status", "run-1"],
+        provider_version="0.1.0",
+        provider_build_id="build",
+        exit_code=0,
+        receipt={
+            "schema": "command-receipt/v2",
+            "ok": True,
+            "status": "completed",
+            "terminal": True,
+            "decision": {
+                "kind": "converged",
+                "report": "Diagnosis did not converge; positive synthesis is rejected.",
+            },
+        },
+        run_id="run-1",
+        attempts=1,
+        terminal=True,
+        receipts=[],
+    )
+    diagnosis = normalize_squad_status(
+        poll,
+        diagnosis_id="diag-contradictory",
+        squad_id="mi-ha-governance",
+        task_id="task-1",
+        run_id="run-1",
+    )
+    assert diagnosis.status is HaDiagnosisStatus.REJECTED
+    assert "contradicted" in diagnosis.reason
+
+
+def test_bare_unverified_word_without_failure_claim_is_not_rejected() -> None:
+    poll = HaCliStatusPollReceipt(
+        status=HaCliStatus.SUCCEEDED,
+        command=["squad", "status", "run-1"],
+        provider_version="0.1.0",
+        provider_build_id="build",
+        exit_code=0,
+        receipt={
+            "schema": "command-receipt/v2",
+            "ok": True,
+            "status": "completed",
+            "terminal": True,
+            "decision": {
+                "kind": "converged",
+                "report": "Historical notes mention an unverified label; all required gates passed.",
+            },
+        },
+        run_id="run-1",
+        attempts=1,
+        terminal=True,
+        receipts=[],
+    )
+    diagnosis = normalize_squad_status(
+        poll,
+        diagnosis_id="diag-normal-report",
+        squad_id="mi-ha-governance",
+        task_id="task-1",
+        run_id="run-1",
+    )
+    assert diagnosis.status is HaDiagnosisStatus.CONVERGED
 
 
 @pytest.mark.parametrize(

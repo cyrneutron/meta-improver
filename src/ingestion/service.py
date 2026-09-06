@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 
+from src.attempt_identity import derive_attempt_identity
 from src.ingestion.models import SignalEvent, SignalSource
 from src.models import Attempt, AttemptStatus, InputSnapshot
 from src.storage import Ledger
@@ -31,8 +32,11 @@ class IngestionService:
         """Record an event once and return the canonical Attempt on replay."""
         if event.signature is None:  # Defensive: SignalEvent derives this today.
             raise ValueError("normalized signal must have a signature")
-        idempotency_key = ":".join((event.signature, self.base_commit, self.strategy_version))
-        attempt_id = "attempt-" + hashlib.sha256(idempotency_key.encode("ascii")).hexdigest()
+        attempt_id, idempotency_key = derive_attempt_identity(
+            event.signature,
+            self.base_commit,
+            self.strategy_version,
+        )
         ci_failed = event.source is SignalSource.CI and event.metadata.get("outcome") == "failure"
         attempt = Attempt(
             attempt_id=attempt_id,

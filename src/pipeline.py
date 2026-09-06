@@ -24,6 +24,7 @@ from src.acceptance import (
     rehydrate_candidate_acceptance_plan,
     rehydrate_candidate_acceptance_receipt,
 )
+from src.attempt_identity import derive_attempt_identity
 from src.attribution import (
     AttributionHypothesis,
     BaselineObservation,
@@ -305,15 +306,13 @@ def _prepare_attempt_recorder(
         raise PipelineError("ledger, input_snapshot, and strategy_version must be supplied together")
     assert ledger is not None and input_snapshot is not None and strategy_version is not None
     baseline, diagnosis = _attempt_components(value, hypothesis)
-    key = _digest(
-        {
-            "signal": baseline.signal_signature,
-            "base_commit": baseline.base_commit,
-            "strategy_version": strategy_version,
-        }
+    derived_attempt_id, key = derive_attempt_identity(
+        baseline.signal_signature,
+        baseline.base_commit,
+        strategy_version,
     )
     initial = Attempt(
-        attempt_id=baseline.attempt_id,
+        attempt_id=baseline.attempt_id or derived_attempt_id,
         idempotency_key=key,
         signal=baseline.signal_signature,
         base_commit=baseline.base_commit,
@@ -324,12 +323,26 @@ def _prepare_attempt_recorder(
         created_at=input_snapshot.captured_at,
         updated_at=input_snapshot.captured_at,
     )
-    existing = ledger.find_by_idempotency_key(key)
+    existing = ledger.get_attempt(initial.attempt_id)
+    if existing is not None:
+        immutable = (
+            "attempt_id",
+            "signal",
+            "base_commit",
+            "strategy_version",
+            "input_snapshot",
+            "model_version",
+            "prompt_version",
+            "created_at",
+        )
+        if any(getattr(existing, field) != getattr(initial, field) for field in immutable):
+            raise LedgerConflictError("attempt id belongs to a different pipeline attempt")
+    else:
+        existing = ledger.find_by_idempotency_key(key)
     if existing is None:
         existing = ledger.record_attempt(initial)
     immutable = (
         "attempt_id",
-        "idempotency_key",
         "signal",
         "base_commit",
         "strategy_version",

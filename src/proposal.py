@@ -254,6 +254,12 @@ class ApprovalToken(_ProposalContract):
             "approverIdentity",
         ),
     )
+    reviewer_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=200,
+        validation_alias=AliasChoices("reviewer_id", "reviewerId"),
+    )
     review_digest: str = Field(
         pattern=_HASH,
         validation_alias=AliasChoices("review_digest", "reviewDigest"),
@@ -275,6 +281,11 @@ class ApprovalToken(_ProposalContract):
     def safe_actor(cls, value: str) -> str:
         return _safe_identity(value, "actor")
 
+    @field_validator("reviewer_id")
+    @classmethod
+    def safe_reviewer(cls, value: str | None) -> str | None:
+        return None if value is None else _safe_identity(value, "reviewer_id")
+
     @field_validator("approved_at", "expires_at")
     @classmethod
     def timestamps_utc(cls, value: datetime, info: Any) -> datetime:
@@ -284,6 +295,8 @@ class ApprovalToken(_ProposalContract):
     def validate_window_and_hash(self) -> ApprovalToken:
         if self.expires_at <= self.approved_at:
             raise ValueError("approval expiry must be after approval time")
+        if self.reviewer_id is not None and self.reviewer_id == self.actor:
+            raise ValueError("approval requires an independent reviewer")
         expected = _digest(
             self.model_dump(mode="json", by_alias=True, exclude={"token_hash"})
         )
@@ -374,6 +387,7 @@ def approve_proposal(
     approver_identity: str | None = None,
     approver_id: str | None = None,
     approved_by: str | None = None,
+    reviewer_id: str | None = None,
     review_digest: str | None = None,
     content_digest: str | None = None,
     plan_digest: str | None = None,
@@ -432,12 +446,15 @@ def approve_proposal(
             scope=selected,
             plan_hash=hydrated.plan_hash or "",
             actor=resolved_actor,
+            reviewer_id=reviewer_id,
             review_digest=review_digest,
             content_digest=content_digest,
             approved_at=start,
             expires_at=end,
         )
     except Exception as exc:
+        if "independent reviewer" in str(exc):
+            raise ProposalError("approval requires an independent reviewer") from exc
         raise ProposalError("approval token was rejected") from exc
 
 

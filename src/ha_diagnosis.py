@@ -16,12 +16,22 @@ from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from src.ha_cli import HaCliAdapter, HaCliStatus, HaCliStatusPollReceipt
+from src.ha_cli import HaCliAdapter, HaCliPermissionMode, HaCliStatus, HaCliStatusPollReceipt
 from src.models import Attempt, AttemptStatus, InputSnapshot
 
 
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$")
 _SECRET = re.compile(r"(?:bearer\s+\S+|(?:api[_-]?key|token|password|secret|authorization)\s*[:=]\s*\S+)", re.I)
+_CONVERGENCE_CONTRADICTION = re.compile(
+    r"(?:did\s+not\s+converge|without\s+positive\s+convergence|"
+    r"positive\s+synthesis\s+is\s+rejected|synthesis\s+(?:was\s+)?absent|"
+    r"checkpoint\s+(?:failed|unresolved)|non[- ]terminal|"
+    r"(?:daemon|squad\s+list|roster)\s+(?:check\s+)?failed|"
+    r"unsupported_command|"
+    r"(?:evidence|synthesis|convergence)\s+(?:is|remains|was)\s+unverified|"
+    r"(?:evidence|synthesis|convergence)\s+(?:could\s+not|cannot|can't)\s+be\s+verified)",
+    re.I,
+)
 
 
 def _canonical(value: Any) -> str:
@@ -176,6 +186,17 @@ def _decision(payload: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
+def _contradictory_convergence(decision: dict[str, Any] | None) -> bool:
+    """Reject a terminal convergence claim carrying explicit failure text."""
+    if not decision:
+        return False
+    text = "\n".join(
+        value for key in ("report", "summary", "reason")
+        if isinstance(value := decision.get(key), str)
+    )
+    return bool(_CONVERGENCE_CONTRADICTION.search(text))
+
+
 def collect_squad_diagnosis(
     adapter: HaCliAdapter,
     root,
@@ -189,11 +210,12 @@ def collect_squad_diagnosis(
     interval_seconds: float = 1.0,
     max_attempts: int = 30,
     deadline_seconds: float = 30.0,
+    permission_mode: HaCliPermissionMode = "read-only",
 ) -> HaDiagnosis:
     """Run one bounded Squad Leader diagnosis and normalize its terminal result."""
 
     started = datetime.now(timezone.utc)
-    launch = adapter.squad_run(root, squad_id, instance, cwd, task_id, prompt)
+    launch = adapter.squad_run(root, squad_id, instance, cwd, task_id, prompt, permission_mode)
     launch_payload = launch.receipt or {}
     run_id = _run_id(launch_payload)
     if launch.status is HaCliStatus.UNSUPPORTED:
@@ -239,11 +261,18 @@ def normalize_squad_status(
     summary = decision.get("summary") if decision else None
     raw_findings = decision.get("findings") if decision else None
     findings = [HaDiagnosisFinding.model_validate(item) for item in raw_findings] if isinstance(raw_findings, list) else []
+    convergence_conflict = _contradictory_convergence(decision)
     converged = (
         poll.status is HaCliStatus.SUCCEEDED
         and poll.terminal
         and isinstance(decision, dict)
         and decision.get("kind") == "converged"
+        and not convergence_conflict
+    )
+    conflict_reason = (
+        "Squad convergence claim contradicted by explicit failure or unverified evidence in its report."
+        if convergence_conflict
+        else ""
     )
     status = (
         HaDiagnosisStatus.CONVERGED
@@ -258,7 +287,7 @@ def normalize_squad_status(
         summary=summary if isinstance(summary, str) else None, findings=findings,
         provider_version=poll.provider_version, provider_build_id=poll.provider_build_id,
         poll_attempts=poll.attempts, receipt_digest=_digest(payload),
-        reason="" if converged else (poll.reason or "Squad run did not converge."), observed_at=observed_at or datetime.now(timezone.utc),
+        reason="" if converged else (conflict_reason or poll.reason or "Squad run did not converge."), observed_at=observed_at or datetime.now(timezone.utc),
     )
 
 

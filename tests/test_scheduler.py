@@ -11,7 +11,7 @@ from src.scheduler import (
     rehydrate_dispatch_receipt,
     rehydrate_dispatch_request,
 )
-from src.proposal import ApprovalScope, ApprovalToken
+from src.proposal import ApprovalScope, ApprovalToken, ProposalPayload, approve_proposal, plan_proposal
 
 
 HASH = "sha256:" + "a" * 64
@@ -25,6 +25,22 @@ def request(*, key: str = "idem-1", event: str = "event-1", action: DispatchActi
         proposal_plan_hash=HASH,
         action=action,
         attempt=attempt,
+    )
+
+
+def consent_plan():
+    return plan_proposal(
+        ProposalPayload(
+            repo="cyrneutron/meta-improver",
+            head="mi/attempt-1",
+            base="main",
+            base_commit="a" * 40,
+            patch_hash="sha256:" + "b" * 64,
+            acceptance_receipt_hash="sha256:" + "c" * 64,
+            changed_paths=["src/proposal.py"],
+            title="Add proposal protocol",
+            body="This proposal is backed by acceptance evidence.",
+        )
     )
 
 
@@ -90,16 +106,34 @@ def test_push_and_create_pr_require_matching_authorization(action: DispatchActio
     assert InMemoryDispatchCoordinator(approval=True).dispatch(req, now=NOW).status is DispatchStatus.REJECTED
     assert InMemoryDispatchCoordinator(approval="proposal").dispatch(req, now=NOW).status is DispatchStatus.REJECTED
     assert InMemoryDispatchCoordinator(approval=action.value).dispatch(req, now=NOW).status is DispatchStatus.REJECTED
+    plan = consent_plan()
     token = ApprovalToken(
         scope=ApprovalScope(action.value),
-        plan_hash=HASH,
+        plan_hash=plan.plan_hash or "",
         actor="reviewer/alice",
         review_digest=HASH,
-        content_digest=HASH,
+        content_digest=plan.payload.payload_hash,
         approved_at=NOW,
         expires_at=NOW + timedelta(hours=1),
     )
-    assert InMemoryDispatchCoordinator(approval=token).dispatch(req, now=NOW).status is DispatchStatus.ACCEPTED
+    consent_request = DispatchRequest(
+        idempotency_key=req.idempotency_key,
+        event_id=req.event_id,
+        proposal_plan_hash=plan.plan_hash or "",
+        action=action,
+        attempt=1,
+    )
+    assert (
+        InMemoryDispatchCoordinator(approval=token, actor_id="reviewer/alice")
+        .dispatch(
+            consent_request,
+            proposal_plan=plan,
+            review_digest=HASH,
+            now=NOW,
+        )
+        .status
+        is DispatchStatus.ACCEPTED
+    )
 
 
 @pytest.mark.parametrize("approval", [True, "push", "create_pr"])
@@ -110,6 +144,40 @@ def test_publish_rejects_approval_without_complete_consent_token(approval: objec
     )
     assert receipt.status is DispatchStatus.REJECTED
     assert "complete approval token" in receipt.reason
+
+
+def test_consent_authorization_binds_actor_review_and_plan() -> None:
+    plan = consent_plan()
+    review_digest = "sha256:" + "d" * 64
+    token = approve_proposal(
+        plan,
+        ApprovalScope.CREATE_PR,
+        approver="cyr",
+        review_digest=review_digest,
+        plan_digest=plan.plan_hash,
+        content_digest=plan.payload.payload_hash,
+        approved_at=NOW,
+        expires_at=NOW + timedelta(hours=1),
+    )
+    req = DispatchRequest(
+        idempotency_key="consent-idem",
+        event_id="consent-event",
+        proposal_plan_hash=plan.plan_hash or "",
+        action=DispatchAction.CREATE_PR,
+        attempt=1,
+    )
+    coordinator = InMemoryDispatchCoordinator(approval=token, actor_id="cyr")
+    accepted = coordinator.dispatch(req, proposal_plan=plan, review_digest=review_digest, now=NOW)
+    assert accepted.status is DispatchStatus.ACCEPTED
+
+    missing_plan = InMemoryDispatchCoordinator(approval=token, actor_id="cyr").dispatch(
+        req, now=NOW
+    )
+    assert missing_plan.status is DispatchStatus.REJECTED
+    wrong_actor = InMemoryDispatchCoordinator(approval=token, actor_id="other").dispatch(
+        req, proposal_plan=plan, now=NOW
+    )
+    assert wrong_actor.status is DispatchStatus.REJECTED
 
 
 def test_merge_main_is_always_rejected_and_proposal_is_queueable() -> None:
