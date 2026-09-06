@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 jobs:
-  test:
+  platform-tests:
     strategy:
       fail-fast: false
       matrix:
@@ -32,3 +32,16 @@ jobs:
         run: uv run pytest -q
       - name: Compile sources and tests
         run: uv run python -m compileall -q src tests
+
+  # Keep one stable required check for branch protection while platform jobs
+  # can expand without changing the protected-check name.
+  test:
+    if: ${{ always() }}
+    needs: platform-tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require all platform tests to pass
+        if: ${{ needs.platform-tests.result != 'success' }}
+        run: exit 1
+      - name: Platform tests passed
+        run: echo "All platform tests passed"
