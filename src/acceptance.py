@@ -13,6 +13,7 @@ import json
 import math
 import re
 from enum import StrEnum
+from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import AliasChoices, ConfigDict, Field, field_validator, model_validator
@@ -44,6 +45,23 @@ MAX_COMPLEXITY_DELTA = 1_000.0
 MAX_COST_UNITS = 1_000_000.0
 MAX_TEST_COUNT = 100_000
 MAX_TEXT = 20_000
+
+_COMMIT = re.compile(r"^[0-9a-f]{40}$")
+_IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,119}$")
+_REPOSITORY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,38}/[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$")
+
+
+def _safe_identifier(value: str, field_name: str) -> str:
+    if not isinstance(value, str) or _IDENTIFIER.fullmatch(value) is None:
+        raise ValueError(f"{field_name} must be a bounded identifier")
+    return value
+
+
+def _safe_branch_identifier(value: str, field_name: str) -> str:
+    _safe_identifier(value, field_name)
+    if ".." in value or value.endswith(".") or value.casefold().endswith(".lock") or value.startswith(".") or "@{" in value:
+        raise ValueError(f"{field_name} is unsafe to derive a Git ref")
+    return value
 
 
 def _canonical(value: Any) -> str:
@@ -540,6 +558,99 @@ class CandidateAcceptanceReceipt(_AcceptanceContract):
         return self.plan_hash
 
 
+class CandidateAcceptanceAdmission(_AcceptanceContract):
+    """Typed handoff from a locally accepted candidate to target publication."""
+
+    schema_: Literal["candidate-acceptance-admission/v1"] = Field(
+        default="candidate-acceptance-admission/v1", alias="schema", serialization_alias="schema"
+    )
+    acceptance_receipt: CandidateAcceptanceReceipt
+    repository: str
+    target_task_id: str
+    accepted_execution_id: str
+    accepted_commit: str = Field(pattern=r"^[0-9a-f]{40}$")
+    target_root: Path
+    expected_remote: str
+    admission_hash: str | None = Field(default=None, pattern=_HASH)
+
+    @field_validator("repository")
+    @classmethod
+    def repository_is_safe(cls, value: str) -> str:
+        if _REPOSITORY.fullmatch(value) is None:
+            raise ValueError("repository must be an owner/name identifier")
+        return value
+
+    @field_validator("target_task_id")
+    @classmethod
+    def target_task_is_safe(cls, value: str) -> str:
+        return _safe_branch_identifier(value, "target_task_id")
+
+    @field_validator("accepted_execution_id")
+    @classmethod
+    def execution_is_safe(cls, value: str) -> str:
+        return _safe_identifier(value, "accepted_execution_id")
+
+    @field_validator("target_root")
+    @classmethod
+    def root_is_absolute(cls, value: Path) -> Path:
+        if not value.is_absolute():
+            raise ValueError("target_root must be an absolute path")
+        return value
+
+    @field_validator("expected_remote")
+    @classmethod
+    def remote_is_safe(cls, value: str) -> str:
+        if (
+            not isinstance(value, str)
+            or not value.startswith("https://github.com/")
+            or not value.endswith(".git")
+            or _SECRET.search(value)
+        ):
+            raise ValueError("expected_remote must be a GitHub HTTPS git remote")
+        return value
+
+    @model_validator(mode="after")
+    def validate_admission(self) -> "CandidateAcceptanceAdmission":
+        try:
+            receipt = rehydrate_candidate_acceptance_receipt(self.acceptance_receipt)
+        except Exception as exc:
+            raise ValueError("acceptance admission contains an invalid receipt") from exc
+        if not receipt.accepted:
+            raise ValueError("acceptance admission requires an accepted receipt")
+        if self.expected_remote != f"https://github.com/{self.repository}.git":
+            raise ValueError("expected_remote is not bound to repository")
+        object.__setattr__(self, "acceptance_receipt", receipt)
+        expected = _digest(self.model_dump(mode="json", by_alias=True, exclude={"admission_hash"}))
+        if self.admission_hash is not None and self.admission_hash != expected:
+            raise ValueError("admission_hash does not match canonical contents")
+        object.__setattr__(self, "admission_hash", expected)
+        return self
+
+
+def rehydrate_candidate_acceptance_admission(
+    admission: CandidateAcceptanceAdmission,
+) -> CandidateAcceptanceAdmission:
+    """Round-trip an admission before it crosses into publication."""
+
+    if not isinstance(admission, CandidateAcceptanceAdmission) or admission.admission_hash is None:
+        raise AcceptanceError("cannot use an unhashed candidate acceptance admission")
+    existing_hash = admission.admission_hash
+    canonical = _canonical(admission.model_dump(mode="json", by_alias=True))
+    try:
+        hydrated = CandidateAcceptanceAdmission.model_validate(json.loads(canonical))
+    except Exception as exc:
+        raise AcceptanceError("candidate acceptance admission failed integrity rehydration") from exc
+    if (
+        hydrated.admission_hash != existing_hash
+        or _canonical(hydrated.model_dump(mode="json", by_alias=True)) != canonical
+    ):
+        raise AcceptanceError("candidate acceptance admission hash does not match canonical contents")
+    return hydrated
+
+
+CandidateAcceptanceAdmission.model_rebuild()
+
+
 def rehydrate_candidate_acceptance_receipt(
     receipt: CandidateAcceptanceReceipt,
 ) -> CandidateAcceptanceReceipt:
@@ -655,6 +766,7 @@ __all__ = [
     "BaselineGateStatus",
     "BaselineStatus",
     "CandidateAcceptanceGate",
+    "CandidateAcceptanceAdmission",
     "CandidateAcceptancePlan",
     "CandidateAcceptanceReceipt",
     "CandidateAcceptanceStatus",
@@ -672,4 +784,5 @@ __all__ = [
     "rehydrate_acceptance_receipt",
     "rehydrate_candidate_acceptance_plan",
     "rehydrate_candidate_acceptance_receipt",
+    "rehydrate_candidate_acceptance_admission",
 ]

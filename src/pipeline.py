@@ -41,6 +41,7 @@ from src.models import (
 )
 from src.models.contracts import TestStatus, utc_now
 from src.storage.ledger_db import Ledger, LedgerConflictError
+from src.target_publication import TargetPublicationReceipt, TargetPublicationStatus, rehydrate_target_publication
 
 
 _HASH = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -84,6 +85,7 @@ class PipelineInput(_PipelineContract):
     candidate: CandidateChangeEvidence
     acceptance_plan: CandidateAcceptancePlan
     acceptance_receipt: CandidateAcceptanceReceipt
+    publication_receipt: TargetPublicationReceipt | None = None
     input_hash: str | None = Field(default=None, pattern=_HASH)
 
     @model_validator(mode="after")
@@ -111,6 +113,7 @@ class PipelinePlan(_PipelineContract):
     candidate_hash: str = Field(pattern=_HASH)
     acceptance_plan_hash: str = Field(pattern=_HASH)
     acceptance_receipt_hash: str = Field(pattern=_HASH)
+    publication_receipt_hash: str | None = Field(default=None, pattern=_HASH)
     plan_hash: str | None = Field(default=None, pattern=_HASH)
 
     @model_validator(mode="after")
@@ -126,6 +129,8 @@ class PipelinePlan(_PipelineContract):
             raise ValueError("pipeline acceptance plan binding does not match")
         if value.acceptance_receipt.receipt_hash != self.acceptance_receipt_hash:
             raise ValueError("pipeline acceptance receipt binding does not match")
+        if (value.publication_receipt.receipt_hash if value.publication_receipt is not None else None) != self.publication_receipt_hash:
+            raise ValueError("pipeline publication receipt binding does not match")
         expected = _digest(self.model_dump(mode="json", by_alias=True, exclude={"plan_hash"}))
         if self.plan_hash is not None and self.plan_hash != expected:
             raise ValueError("pipeline plan_hash does not match canonical contents")
@@ -148,6 +153,7 @@ class PipelineReceipt(_PipelineContract):
     pipeline_plan: PipelinePlan
     status: PipelineStatus = PipelineStatus.SUCCEEDED
     acceptance_receipt_hash: str = Field(pattern=_HASH)
+    publication_receipt_hash: str | None = Field(default=None, pattern=_HASH)
     reason: str = Field(default="acceptance receipt proven", min_length=1, max_length=2_000)
     receipt_hash: str | None = Field(default=None, pattern=_HASH)
 
@@ -157,6 +163,8 @@ class PipelineReceipt(_PipelineContract):
             raise ValueError("pipeline receipt must be succeeded")
         if self.acceptance_receipt_hash != self.pipeline_plan.acceptance_receipt_hash:
             raise ValueError("pipeline receipt is not bound to acceptance receipt")
+        if self.publication_receipt_hash != self.pipeline_plan.publication_receipt_hash:
+            raise ValueError("pipeline receipt is not bound to publication receipt")
         expected = _digest(
             self.model_dump(mode="json", by_alias=True, exclude={"receipt_hash"})
         )
@@ -402,16 +410,18 @@ def _components_from(
     candidate: CandidateChangeEvidence | None,
     acceptance_plan: CandidateAcceptancePlan | None,
     acceptance_receipt: CandidateAcceptanceReceipt | None,
+    publication_receipt: TargetPublicationReceipt | None,
 ) -> tuple[
     BaselineObservation,
     AttributionHypothesis,
     CandidateChangeEvidence,
     CandidateAcceptancePlan,
     CandidateAcceptanceReceipt,
+    TargetPublicationReceipt | None,
     str | None,
 ]:
     if isinstance(value, PipelineInput):
-        if any(item is not None for item in (hypothesis, candidate, acceptance_plan, acceptance_receipt)):
+        if any(item is not None for item in (hypothesis, candidate, acceptance_plan, acceptance_receipt, publication_receipt)):
             raise PipelineError("pipeline input cannot be combined with component overrides")
         return (
             value.baseline,
@@ -419,13 +429,14 @@ def _components_from(
             value.candidate,
             value.acceptance_plan,
             value.acceptance_receipt,
+            value.publication_receipt,
             value.input_hash,
         )
     if not isinstance(value, BaselineObservation):
         raise PipelineError("pipeline requires a BaselineObservation")
     if any(item is None for item in (hypothesis, candidate, acceptance_plan, acceptance_receipt)):
         raise PipelineError("pipeline requires baseline, hypothesis, candidate, acceptance plan, and receipt")
-    return value, hypothesis, candidate, acceptance_plan, acceptance_receipt, None  # type: ignore[return-value]
+    return value, hypothesis, candidate, acceptance_plan, acceptance_receipt, publication_receipt, None  # type: ignore[return-value]
 
 
 def _validate_in_order(
@@ -434,13 +445,14 @@ def _validate_in_order(
     candidate: CandidateChangeEvidence | None = None,
     acceptance_plan: CandidateAcceptancePlan | None = None,
     acceptance_receipt: CandidateAcceptanceReceipt | None = None,
+    publication_receipt: TargetPublicationReceipt | None = None,
     *,
     stage_callback: _StageCallback | None = None,
 ) -> PipelineInput:
     """Validate in dependency order, preserving the fail-closed boundary."""
 
-    raw_baseline, raw_hypothesis, raw_candidate, raw_plan, raw_receipt, input_hash = _components_from(
-        value, hypothesis, candidate, acceptance_plan, acceptance_receipt
+    raw_baseline, raw_hypothesis, raw_candidate, raw_plan, raw_receipt, raw_publication, input_hash = _components_from(
+        value, hypothesis, candidate, acceptance_plan, acceptance_receipt, publication_receipt
     )
 
     # Baseline is intentionally the first semantic gate.
@@ -529,6 +541,26 @@ def _validate_in_order(
             stage=AttemptStage.ACCEPTANCE_EVALUATED,
         )
 
+    publication = None
+    if raw_publication is not None:
+        try:
+            publication = rehydrate_target_publication(raw_publication)
+        except Exception as exc:
+            raise PipelineError(
+                "publication receipt failed integrity validation",
+                stage=AttemptStage.ACCEPTANCE_EVALUATED,
+            ) from exc
+        if publication.status is not TargetPublicationStatus.SUCCEEDED:
+            raise PipelineError(
+                "pipeline cannot consume a non-successful publication receipt",
+                stage=AttemptStage.ACCEPTANCE_EVALUATED,
+            )
+        if publication.acceptance_plan_hash != plan.plan_hash:
+            raise PipelineError(
+                "publication receipt is not bound to the acceptance plan",
+                stage=AttemptStage.ACCEPTANCE_EVALUATED,
+            )
+
     try:
         normalized = PipelineInput(
             baseline=baseline,
@@ -536,6 +568,7 @@ def _validate_in_order(
             candidate=hydrated_candidate,
             acceptance_plan=plan,
             acceptance_receipt=receipt,
+            publication_receipt=publication,
         )
     except Exception as exc:
         raise PipelineError(
@@ -564,6 +597,7 @@ def _build_pipeline_plan(
     candidate: CandidateChangeEvidence | None = None,
     acceptance_plan: CandidateAcceptancePlan | None = None,
     acceptance_receipt: CandidateAcceptanceReceipt | None = None,
+    publication_receipt: TargetPublicationReceipt | None = None,
     *,
     stage_callback: _StageCallback | None = None,
 ) -> PipelinePlan:
@@ -573,6 +607,7 @@ def _build_pipeline_plan(
         candidate,
         acceptance_plan,
         acceptance_receipt,
+        publication_receipt,
         stage_callback=stage_callback,
     )
     try:
@@ -583,6 +618,7 @@ def _build_pipeline_plan(
             candidate_hash=normalized.candidate.evidence_hash or "",
             acceptance_plan_hash=normalized.acceptance_plan.plan_hash or "",
             acceptance_receipt_hash=normalized.acceptance_receipt.receipt_hash or "",
+            publication_receipt_hash=(normalized.publication_receipt.receipt_hash if normalized.publication_receipt else None),
         )
     except Exception as exc:
         raise PipelineError(
@@ -597,11 +633,12 @@ def plan_pipeline(
     candidate: CandidateChangeEvidence | None = None,
     acceptance_plan: CandidateAcceptancePlan | None = None,
     acceptance_receipt: CandidateAcceptanceReceipt | None = None,
+    publication_receipt: TargetPublicationReceipt | None = None,
 ) -> PipelinePlan:
     """Validate and compose a deterministic pipeline plan without execution."""
 
     return _build_pipeline_plan(
-        value, hypothesis, candidate, acceptance_plan, acceptance_receipt
+        value, hypothesis, candidate, acceptance_plan, acceptance_receipt, publication_receipt
     )
 
 
@@ -611,6 +648,7 @@ def run_pipeline(
     candidate: CandidateChangeEvidence | None = None,
     acceptance_plan: CandidateAcceptancePlan | None = None,
     acceptance_receipt: CandidateAcceptanceReceipt | None = None,
+    publication_receipt: TargetPublicationReceipt | None = None,
     *,
     ledger: Ledger | None = None,
     input_snapshot: InputSnapshot | None = None,
@@ -649,6 +687,7 @@ def run_pipeline(
                     candidate_hash=plan.candidate_hash,
                     acceptance_plan_hash=plan.acceptance_plan_hash,
                     acceptance_receipt_hash=plan.acceptance_receipt_hash,
+                    publication_receipt_hash=plan.publication_receipt_hash,
                 )
             )
         else:
@@ -658,6 +697,7 @@ def run_pipeline(
                 candidate,
                 acceptance_plan,
                 acceptance_receipt,
+                publication_receipt,
                 stage_callback=recorder.advance if recorder is not None else None,
             )
         try:
@@ -665,6 +705,7 @@ def run_pipeline(
                 pipeline_plan=plan,
                 status=PipelineStatus.SUCCEEDED,
                 acceptance_receipt_hash=plan.acceptance_receipt_hash,
+                publication_receipt_hash=plan.publication_receipt_hash,
             )
         except Exception as exc:
             raise PipelineError(

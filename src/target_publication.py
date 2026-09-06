@@ -19,10 +19,11 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Mapping, Protocol, Sequence
+from typing import Any, Literal, Mapping, Protocol, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from src.acceptance import CandidateAcceptanceAdmission, rehydrate_candidate_acceptance_admission
 from src.ha_cli import ProcessResult
 
 
@@ -75,20 +76,54 @@ def _safe_utc(value: datetime) -> datetime:
     return value.astimezone(timezone.utc)
 
 
+def _safe_branch_task_id(value: str, field_name: str = "target_task_id") -> str:
+    if _BRANCH_TASK_ID.fullmatch(value) is None:
+        raise ValueError(f"{field_name} must be safe to derive an MI Git branch")
+    if (
+        ".." in value
+        or value.endswith(".")
+        or value.casefold().endswith(".lock")
+        or value.startswith(".")
+        or "@{" in value
+    ):
+        raise ValueError(f"{field_name} is unsafe to derive a Git ref")
+    return value
+
+
 class TargetPublicationRequest(BaseModel):
     """The hash-bound publication input produced after target acceptance."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    repository: str
-    target_task_id: str
-    accepted_execution_id: str
-    accepted_commit: str
+    admission: CandidateAcceptanceAdmission | None = None
+    repository: str | None = None
+    target_task_id: str | None = None
+    accepted_execution_id: str | None = None
+    accepted_commit: str | None = None
     title: str
     body: str
     base_branch: str = "main"
     max_poll_attempts: int = Field(default=30, ge=1, le=120)
     poll_interval_seconds: float = Field(default=5.0, ge=0, le=60)
+
+    @model_validator(mode="after")
+    def validate_admission(self) -> "TargetPublicationRequest":
+        if self.admission is not None:
+            admission = rehydrate_candidate_acceptance_admission(self.admission)
+            for field in ("repository", "target_task_id", "accepted_execution_id", "accepted_commit"):
+                supplied = getattr(self, field)
+                expected = getattr(admission, field)
+                if supplied is not None and supplied != expected:
+                    raise ValueError(f"{field} is not bound to acceptance admission")
+                object.__setattr__(self, field, expected)
+        if any(getattr(self, field) is None for field in ("repository", "target_task_id", "accepted_execution_id", "accepted_commit")):
+            raise ValueError("publication request requires repository, task, execution, and commit")
+        return self
+
+    def require_admission(self) -> CandidateAcceptanceAdmission:
+        if self.admission is None:
+            raise TargetPublicationError("typed candidate acceptance admission is required")
+        return rehydrate_candidate_acceptance_admission(self.admission)
 
     @field_validator("repository")
     @classmethod
@@ -107,9 +142,7 @@ class TargetPublicationRequest(BaseModel):
     @field_validator("target_task_id")
     @classmethod
     def target_task_is_git_branch_safe(cls, value: str) -> str:
-        if _BRANCH_TASK_ID.fullmatch(value) is None:
-            raise ValueError("target_task_id must be safe to derive an MI Git branch")
-        return value
+        return _safe_branch_task_id(value)
 
     @field_validator("accepted_commit")
     @classmethod
@@ -141,11 +174,35 @@ class TargetPublicationRequest(BaseModel):
 
     @property
     def expected_origin(self) -> str:
-        return f"https://github.com/{self.repository}.git"
+        return self.admission.expected_remote if self.admission is not None else f"https://github.com/{self.repository}.git"
 
     @property
     def request_hash(self) -> str:
-        return _digest(self.model_dump(mode="json"))
+        return _digest(self.binding_material)
+
+    @property
+    def binding_material(self) -> dict[str, Any]:
+        material = {
+            "repository": self.repository,
+            "target_task_id": self.target_task_id,
+            "accepted_execution_id": self.accepted_execution_id,
+            "accepted_commit": self.accepted_commit,
+            "base_branch": self.base_branch,
+            "head_branch": self.head_branch,
+        }
+        if self.admission is not None:
+            material.update(
+                {
+                    "acceptance_plan_hash": self.admission.acceptance_receipt.plan_hash,
+                    "admission_hash": self.admission.admission_hash,
+                    "target_root": str(self.admission.target_root),
+                    "expected_remote": self.admission.expected_remote,
+                }
+            )
+        return material
+
+
+TargetPublicationRequest.model_rebuild()
 
 
 class RequiredCheck(BaseModel):
@@ -176,7 +233,14 @@ class RequiredCheck(BaseModel):
     def link_is_safe(cls, value: str | None) -> str | None:
         if value is None:
             return None
-        if not isinstance(value, str) or len(value) > 500 or not value.startswith("https://github.com/"):
+        if (
+            not isinstance(value, str)
+            or len(value) > 500
+            or "\r" in value
+            or "\n" in value
+            or not value.startswith("https://github.com/")
+            or _SECRET.search(value)
+        ):
             raise ValueError("check link must be a bounded GitHub HTTPS URL")
         return value
 
@@ -186,15 +250,19 @@ class TargetPublicationReceipt(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_: str = Field(
+    schema_: Literal["target-publication-receipt/v1"] = Field(
         default="target-publication-receipt/v1", alias="schema", serialization_alias="schema"
     )
     status: TargetPublicationStatus
+    admission: CandidateAcceptanceAdmission | None = None
     request_hash: str = Field(pattern=_DIGEST.pattern)
     repository: str
     target_task_id: str
     accepted_execution_id: str
     accepted_commit: str = Field(pattern=_COMMIT.pattern)
+    acceptance_plan_hash: str | None = Field(default=None, pattern=_DIGEST.pattern)
+    target_root: Path | None = None
+    expected_remote: str | None = None
     head_branch: str
     base_branch: str = "main"
     pr_number: int | None = Field(default=None, ge=1)
@@ -215,11 +283,28 @@ class TargetPublicationReceipt(BaseModel):
     def receipt_identifier_is_safe(cls, value: str, info: Any) -> str:
         return TargetPublicationRequest.identifier_is_safe(value, info)
 
+    @field_validator("target_root")
+    @classmethod
+    def receipt_root_is_absolute(cls, value: Path | None) -> Path | None:
+        if value is not None and not value.is_absolute():
+            raise ValueError("target_root must be an absolute path")
+        return value
+
+    @field_validator("expected_remote")
+    @classmethod
+    def receipt_remote_is_safe(cls, value: str | None) -> str | None:
+        if value is not None and (
+            not value.startswith("https://github.com/") or not value.endswith(".git") or _SECRET.search(value)
+        ):
+            raise ValueError("expected_remote must be a GitHub HTTPS git remote")
+        return value
+
     @field_validator("head_branch")
     @classmethod
     def head_branch_is_safe(cls, value: str) -> str:
-        if not isinstance(value, str) or not value.startswith("mi/") or _TASK_ID.fullmatch(value[3:]) is None:
-            raise ValueError("head_branch must be an MI task branch")
+        if not isinstance(value, str) or not value.startswith("mi/"):
+            raise ValueError("head_branch is unsafe to derive an MI Git branch")
+        _safe_branch_task_id(value[3:], "head_branch is unsafe to derive")
         return value
 
     @field_validator("base_branch")
@@ -252,8 +337,22 @@ class TargetPublicationReceipt(BaseModel):
 
     @model_validator(mode="after")
     def validate_bindings_and_hash(self) -> TargetPublicationReceipt:
-        if _BRANCH_TASK_ID.fullmatch(self.target_task_id) is None:
-            raise ValueError("receipt target task is unsafe to derive an MI Git branch")
+        if self.admission is not None:
+            try:
+                admission = rehydrate_candidate_acceptance_admission(self.admission)
+            except Exception as exc:
+                raise ValueError("publication receipt contains an invalid admission") from exc
+            if self.accepted_commit != admission.accepted_commit:
+                raise ValueError("publication receipt commit is not bound to admission")
+            if self.acceptance_plan_hash != admission.acceptance_receipt.plan_hash:
+                raise ValueError("publication receipt acceptance plan is not bound to admission")
+            if self.repository != admission.repository or self.target_task_id != admission.target_task_id:
+                raise ValueError("publication receipt identity is not bound to admission")
+            if self.target_root != admission.target_root or self.expected_remote != admission.expected_remote:
+                raise ValueError("publication receipt target identity is not bound to admission")
+        if self.expected_remote is not None and self.expected_remote != f"https://github.com/{self.repository}.git":
+            raise ValueError("expected_remote is not bound to repository")
+        _safe_branch_task_id(self.target_task_id, "receipt target task")
         if self.head_branch != f"mi/{self.target_task_id}":
             raise ValueError("receipt head branch is not bound to target task")
         if self.pr_number is None and self.pr_url is not None:
@@ -267,12 +366,32 @@ class TargetPublicationReceipt(BaseModel):
         if self.status is TargetPublicationStatus.SUCCEEDED:
             if self.pr_number is None or self.pr_url is None or not self.checks:
                 raise ValueError("successful publication requires a pull request and required checks")
+            if self.poll_attempts < 1:
+                raise ValueError("successful publication requires a completed check poll")
             if any(check.state != "SUCCESS" for check in self.checks):
                 raise ValueError("successful publication requires all required checks to succeed")
             if self.reason:
                 raise ValueError("successful publication cannot have a rejection reason")
         elif not self.reason:
             raise ValueError("non-successful publication requires a reason")
+        binding = {
+                "repository": self.repository,
+                "target_task_id": self.target_task_id,
+                "accepted_execution_id": self.accepted_execution_id,
+                "accepted_commit": self.accepted_commit,
+                "base_branch": self.base_branch,
+                "head_branch": self.head_branch,
+            }
+        if self.admission is not None:
+            binding.update({
+                "acceptance_plan_hash": self.acceptance_plan_hash,
+                "admission_hash": self.admission.admission_hash,
+                "target_root": str(self.target_root),
+                "expected_remote": self.expected_remote,
+            })
+        expected_request_hash = _digest(binding)
+        if self.request_hash != expected_request_hash:
+            raise ValueError("request_hash is not bound to publication request fields")
         expected = _digest(self.model_dump(mode="json", by_alias=True, exclude={"receipt_hash"}))
         if self.receipt_hash is not None and self.receipt_hash != expected:
             raise ValueError("receipt_hash does not match canonical contents")
@@ -403,12 +522,16 @@ class TargetPublisher:
     ) -> TargetPublicationReceipt:
         started = datetime.now(timezone.utc)
         try:
+            if request.admission is not None:
+                admission = request.require_admission()
+                if target_root != admission.target_root:
+                    raise TargetPublicationError("target root does not match accepted admission")
             self._verify_executables()
             self._prove_target(target_root, request)
             self._ensure_head_ref(target_root, request)
             pull_request = self._find_or_create_pull_request(target_root, request)
             receipt = self._poll_required_checks(target_root, request, pull_request, started)
-        except TargetPublicationError as exc:
+        except (TargetPublicationError, OSError) as exc:
             receipt = self._receipt(
                 TargetPublicationStatus.REJECTED,
                 request,
@@ -442,6 +565,9 @@ class TargetPublisher:
         if status.stdout.strip():
             raise TargetPublicationError("target worktree has tracked changes")
         self._git(target_root, "cat-file", "-e", f"{request.accepted_commit}^{{commit}}")
+        head = self._git(target_root, "rev-parse", "HEAD").stdout.decode("utf-8", errors="replace").strip()
+        if head != request.accepted_commit:
+            raise TargetPublicationError("target HEAD is not the accepted commit")
 
     def _ensure_head_ref(self, target_root: Path, request: TargetPublicationRequest) -> None:
         existing = self._optional_gh_json(
@@ -474,6 +600,7 @@ class TargetPublisher:
         if len(matches) > 1:
             raise TargetPublicationError("multiple open pull requests match the deterministic branch")
         if matches:
+            self._validate_pull_request(target_root, request, matches[0])
             return matches[0]
         result = self._run(
             target_root,
@@ -499,6 +626,7 @@ class TargetPublisher:
             # the list query. Re-query before deciding that publication failed.
             matches = self._matching_pull_requests(target_root, request)
             if len(matches) == 1:
+                self._validate_pull_request(target_root, request, matches[0])
                 return matches[0]
             raise TargetPublicationError("GitHub pull request creation was rejected")
         match = re.search(
@@ -536,12 +664,12 @@ class TargetPublisher:
         for item in payload:
             if not isinstance(item, dict):
                 raise TargetPublicationError("GitHub pull request list contains an invalid item")
-            if (
-                item.get("headRefName") != request.head_branch
-                or item.get("baseRefName") != request.base_branch
-                or item.get("headRefOid") != request.accepted_commit
-            ):
+            if item.get("headRefName") != request.head_branch:
                 continue
+            if item.get("baseRefName") != request.base_branch:
+                raise TargetPublicationError("an open pull request has an unexpected base branch")
+            if item.get("headRefOid") != request.accepted_commit:
+                raise TargetPublicationError("an open pull request is not bound to the accepted commit")
             number, url = item.get("number"), item.get("url")
             if not isinstance(number, int) or not isinstance(url, str):
                 raise TargetPublicationError("matching pull request is missing identity fields")
@@ -594,7 +722,6 @@ class TargetPublisher:
                 "--required",
                 "--json",
                 "name,state,link",
-                allow_failure=True,
             )
             if not isinstance(payload, list):
                 return self._receipt(
@@ -698,18 +825,23 @@ class TargetPublisher:
             env={"HOME": str(self.config.github_home)},
         )
         payload = self._decode_json(result, "GitHub CLI")
-        if result.exit_code != 0 and not allow_failure:
+        if result.exit_code != 0:
             raise TargetPublicationError("GitHub CLI request was rejected")
         return payload
 
     def _run(self, cwd: Path, argv: list[str], *, env: Mapping[str, str]) -> ProcessResult:
-        return self.transport.run(
-            argv,
-            cwd=cwd,
-            env=env,
-            timeout_seconds=self.config.timeout_seconds,
-            max_output_bytes=self.config.max_output_bytes,
-        )
+        try:
+            return self.transport.run(
+                argv,
+                cwd=cwd,
+                env=env,
+                timeout_seconds=self.config.timeout_seconds,
+                max_output_bytes=self.config.max_output_bytes,
+            )
+        except TargetPublicationError:
+            raise
+        except OSError as exc:
+            raise TargetPublicationError("publication command could not be started") from exc
 
     @staticmethod
     def _decode_json(result: ProcessResult, label: str) -> Any:
@@ -731,11 +863,15 @@ class TargetPublisher:
     ) -> TargetPublicationReceipt:
         return TargetPublicationReceipt(
             status=status,
+            admission=request.admission,
             request_hash=request.request_hash,
             repository=request.repository,
             target_task_id=request.target_task_id,
             accepted_execution_id=request.accepted_execution_id,
             accepted_commit=request.accepted_commit,
+            acceptance_plan_hash=(request.admission.acceptance_receipt.plan_hash if request.admission else None),
+            target_root=request.admission.target_root if request.admission is not None else None,
+            expected_remote=request.expected_origin if request.admission is not None else None,
             head_branch=request.head_branch,
             base_branch=request.base_branch,
             pr_number=pull_request.number if pull_request else None,

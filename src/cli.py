@@ -14,6 +14,7 @@ from src.ha_diagnosis import (
     collect_squad_diagnosis,
     record_squad_diagnosis_attempt,
 )
+from src.acceptance import CandidateAcceptanceAdmission
 from src.storage import Ledger, LedgerConflictError
 from src.target_publication import (
     TargetPublicationConfig,
@@ -220,12 +221,13 @@ def target_publish(
     gh_executable: Annotated[Path, typer.Option(exists=True, dir_okay=False, resolve_path=True)],
     gh_sha256: Annotated[str, typer.Option()],
     github_home: Annotated[Path, typer.Option(exists=True, file_okay=False, resolve_path=True)],
-    repository: Annotated[str, typer.Option()],
-    target_task_id: Annotated[str, typer.Option()],
-    accepted_execution_id: Annotated[str, typer.Option()],
-    accepted_commit: Annotated[str, typer.Option()],
-    title: Annotated[str, typer.Option()],
-    body_file: Annotated[Path, typer.Option(exists=True, dir_okay=False, resolve_path=True)],
+    admission_file: Annotated[Path | None, typer.Option(exists=True, dir_okay=False, resolve_path=True)] = None,
+    repository: Annotated[str | None, typer.Option(hidden=True)] = None,
+    target_task_id: Annotated[str | None, typer.Option(hidden=True)] = None,
+    accepted_execution_id: Annotated[str | None, typer.Option(hidden=True)] = None,
+    accepted_commit: Annotated[str | None, typer.Option(hidden=True)] = None,
+    title: Annotated[str | None, typer.Option()] = None,
+    body_file: Annotated[Path | None, typer.Option(exists=True, dir_okay=False, resolve_path=True)] = None,
     ledger_path: Annotated[Path | None, typer.Option("--ledger", dir_okay=False, resolve_path=True)] = None,
     max_poll_attempts: Annotated[int, typer.Option(min=1, max=120)] = 30,
     poll_interval_seconds: Annotated[float, typer.Option(min=0, max=60)] = 5.0,
@@ -237,11 +239,13 @@ def target_publish(
     """
 
     try:
+        if admission_file is None:
+            raise TargetPublicationError("--admission-file is required; free-form accepted SHA admission is disabled")
+        if title is None or body_file is None:
+            raise TargetPublicationError("--title and --body-file are required")
+        admission = CandidateAcceptanceAdmission.model_validate_json(admission_file.read_text(encoding="utf-8"))
         request = TargetPublicationRequest(
-            repository=repository,
-            target_task_id=target_task_id,
-            accepted_execution_id=accepted_execution_id,
-            accepted_commit=accepted_commit,
+            admission=admission,
             title=title,
             body=body_file.read_text(encoding="utf-8"),
             max_poll_attempts=max_poll_attempts,
