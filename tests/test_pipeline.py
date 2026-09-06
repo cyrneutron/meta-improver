@@ -12,6 +12,7 @@ from src.acceptance import (
     plan_candidate_acceptance,
 )
 from src.attribution import AttributionHypothesis, BaselineObservation, CandidateChangeEvidence
+from src.ingestion import IngestionService, IssueSignal, normalize_issue
 from src.ha_diagnosis import HaDiagnosis, HaDiagnosisStatus, record_squad_diagnosis_attempt
 from src.models import AttemptStage, AttemptStatus, InputSnapshot
 from src.pipeline import (
@@ -226,6 +227,47 @@ def test_pipeline_persists_one_attempt_lifecycle_and_replays_idempotently(tmp_pa
     )
 
 
+def test_pipeline_continues_the_attempt_created_by_ingestion(tmp_path):
+    ledger = Ledger(tmp_path / "history.db")
+    event = normalize_issue(
+        IssueSignal(
+            issue_id="issue-cross-entry",
+            title="Failure",
+            body="Details",
+            observed_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        )
+    )
+    ingested = IngestionService(
+        ledger,
+        base_commit="a" * 40,
+        strategy_version="strategy-v1",
+        model_version="model-v1",
+        prompt_version="prompt-v1",
+    ).ingest(event)
+    fixtures = _fixtures(
+        attempt_id=ingested.attempt_id,
+        signal_signature=ingested.signal,
+    )
+
+    receipt = run_pipeline(
+        *fixtures,
+        ledger=ledger,
+        input_snapshot=ingested.input_snapshot,
+        strategy_version="strategy-v1",
+    )
+
+    completed = ledger.get_attempt(ingested.attempt_id)
+    assert completed is not None
+    assert completed.idempotency_key == ingested.idempotency_key
+    assert completed.status is AttemptStatus.SUCCEEDED
+    assert completed.stage is AttemptStage.COMPLETED
+    assert completed.pipeline_receipt_hash == receipt.receipt_hash
+    assert ledger.count() == 1
+    assert [event.stage for event in ledger.iter_attempt_events(ingested.attempt_id)] == list(
+        AttemptStage
+    )
+
+
 def test_pipeline_reuses_captured_diagnosis_attempt_and_preserves_source(tmp_path):
     ledger = Ledger(tmp_path / "history.db")
     diagnosis = HaDiagnosis(
@@ -322,6 +364,26 @@ def test_pipeline_same_key_with_different_input_fails_closed(tmp_path):
             *_fixtures(),
             ledger=ledger,
             input_snapshot=_snapshot("different captured signal"),
+            strategy_version="strategy-v1",
+        )
+
+    assert ledger.count() == 1
+
+
+def test_pipeline_same_attempt_id_with_different_identity_fails_closed(tmp_path):
+    ledger = Ledger(tmp_path / "history.db")
+    run_pipeline(
+        *_fixtures(),
+        ledger=ledger,
+        input_snapshot=_snapshot(),
+        strategy_version="strategy-v1",
+    )
+
+    with pytest.raises(LedgerConflictError, match="attempt id belongs"):
+        run_pipeline(
+            *_fixtures(signal_signature="different-signal"),
+            ledger=ledger,
+            input_snapshot=_snapshot(),
             strategy_version="strategy-v1",
         )
 
