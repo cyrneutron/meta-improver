@@ -82,6 +82,7 @@ def test_approval_requires_exact_scope_plan_and_valid_time_window() -> None:
         plan,
         ApprovalScope.PUSH,
         approver_identity="reviewer/alice",
+        reviewer_id="reviewer/bob",
         review_digest=REVIEW,
         plan_digest=plan.plan_hash,
         content_digest=plan.payload.payload_hash,
@@ -90,6 +91,7 @@ def test_approval_requires_exact_scope_plan_and_valid_time_window() -> None:
     )
     assert token.token_hash is not None
     assert token.approver_identity == "reviewer/alice"
+    assert token.reviewer_id == "reviewer/bob"
     assert token.review_digest == REVIEW
     assert token.plan_digest == plan.plan_hash
     assert token.content_digest == plan.payload.payload_hash
@@ -150,6 +152,21 @@ def test_approval_requires_complete_consent_contract() -> None:
             approver="reviewer/alice",
             review_digest=REVIEW,
             content_digest=plan.payload.payload_hash,
+        )
+
+
+def test_approval_requires_an_independent_reviewer() -> None:
+    plan = plan_proposal(_payload())
+    with pytest.raises(ProposalError, match="independent reviewer"):
+        approve_proposal(
+            plan,
+            ApprovalScope.PUSH,
+            approver="reviewer/alice",
+            reviewer_id="reviewer/alice",
+            review_digest=REVIEW,
+            content_digest=plan.payload.payload_hash,
+            approved_at=NOW,
+            expires_at=NOW + timedelta(hours=1),
         )
 
 
