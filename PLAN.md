@@ -6,6 +6,27 @@
 
 `meta-improver` 是运行在 Harness Anything（HA）之上的外部改进器，用于摄入 CI/Issue/local log 信号，生成根因假设和候选补丁，在隔离环境中验证并产出可审查证据。
 
+### 术语与执行边界
+
+后文中的“HA”必须带项目限定词。为避免把多个项目的身份混在一起，统一使用：
+
+- MI 源仓库：Meta-Improver 的 Git 源码仓库。
+- MI Harness 仓库：MI 自己的 harness，记录 MI 的任务、事实、决策、评审和结项。
+- 项目源仓库：被改进项目的 Git 仓库、remote 和 ref。
+- 项目 Harness 仓库：该项目独立的 harness 台账、.harness 运行态和本地 writer/daemon 协调状态。
+- 项目稳定目标路径：同时承载项目源树和项目 Harness 身份的权威 checkout，例如 D:\project\ha-target。
+- 项目 Harness agent/runtime：绑定到该项目稳定目标路径并负责项目内实现、测试和项目 Harness 生命周期的执行者；不能简称为“当前 agent”。
+
+推荐描述目标：
+
+> 在 <项目名> 的项目稳定目标路径 <绝对路径> 中，由该项目的 Harness agent/runtime 执行源码和测试任务；MI 负责目标绑定验证、跨项目编排、证据门禁、publication 约束和人工审阅交接。
+
+推荐描述派工：
+
+> 请通过 <项目名> 的 Harness agent/runtime，在 <绝对路径> 执行该项目任务；保留嵌套 Harness 台账、.harness 运行态及 writer/daemon 协调状态，并将 task execution、commit、测试证据、review 状态和 residual risk 回传 MI。
+
+执行归属按项目边界分开：MI 自身代码和 MI Harness 任务由 MI 执行者处理；目标项目的源码、测试和目标项目 Harness 生命周期由目标项目 Harness agent/runtime 处理。MI 不直接写目标项目 Harness 仓库，也不以 source-only linked worktree 替代稳定目标路径。
+
 必须遵守：
 
 - HA `harness/` 文档、canonical events 和任务 artifacts 是真相源；`.harness/` SQLite/HTML 只是可重建投影。
@@ -43,6 +64,8 @@
 2026-09-02 起，该 ledger 使用 schema v3：`attempts` 保留最新快照，`attempt_events` 保留追加式阶段证据。`ha squad-diagnose` 会将受控 Squad diagnosis 与一条可重放的 captured Attempt 绑定，后续 pipeline 使用同一 identity 推进 baseline、attribution、patch validation 和 acceptance。当前 diagnosis 命令以 diagnosis record hash 作为 handoff signal；已存在但无法反推上游 signal 的 6 条 diagnosis 不会被自动虚构成 Attempt。
 
 公开 PR、GitHub Actions 结果和 issue 讨论是审查证据。它们需要被 MI 脱敏、引用并写入相应 task/evidence，但不能替代 `harness/` 的权威记录。GitHub Actions 通过也不会自动完成 HA task；仍需按当前 HA 版本完成 execution、review、consent 和 completion 门禁。
+
+MI 的每次目标改进都必须先形成目标绑定元组：项目稳定目标路径、项目源仓库及 source ref、publication repository/remote、项目 Harness root/name/revision、.harness runtime root，以及 writer lock/daemon/agent 协调状态。同步源库前先保存旧工作和绑定快照；只有确认项目 Harness 身份未被替换、账本干净且 writer 已静默，才允许在稳定目标路径上推进 source ref。目标项目的实现和测试通过项目 Harness agent/runtime 完成，MI 只消费其结构化证据并执行跨项目门禁。
 
 ## 稳定 CLI 提供者与可变目标 clone
 
