@@ -42,6 +42,16 @@ def test_empty_output_and_stdin_eof(transport, tmp_path):
     assert (result.exit_code, result.stdout, result.stderr) == (0, b"", b"")
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows process startup contract")
+def test_empty_environment_keeps_windows_system_root(tmp_path):
+    result = run(
+        SubprocessTransport(),
+        tmp_path,
+        "import os; assert os.environ.get('SystemRoot')",
+    )
+    assert result.exit_code == 0
+
+
 @pytest.mark.parametrize("code", [
     "import time; time.sleep(30)",
     "import os, time; os.close(1); os.close(2); time.sleep(30)",

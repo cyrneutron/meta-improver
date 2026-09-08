@@ -1,5 +1,35 @@
 # Meta-Improver Bootstrap
 
+> 本文件保留 2026-08-29 至 2026-09-04 的 Linux bootstrap 和 provider 晋升历史作为审计证据。
+> 它们不是当前运行绑定；发生冲突时，以紧随其后的 2026-09-08 Windows provider binding 和
+> `PLAN.md` 当前基线为准。
+
+## 当前 Windows provider binding（2026-09-08）
+
+本次在本机实际核对的当前运行基线如下：
+
+| 项目 | 当前值 |
+|---|---|
+| MI source root | `D:\project\meta-improver` |
+| HA provider | `D:\project\harness-anything` |
+| Provider HEAD | `820b6a762577056ead69023259da0b84d7e7b84a` |
+| CLI version / build id | `0.0.1` / `6c3fe263-49d5-437f-9f26-93165f5424f8` |
+| Node / Python | `v24.11.1` / `3.12.10` |
+| HA target | `D:\project\ha-target` |
+| Target branch / HEAD | `codex/windows-provider-runtime-gui-20260908` / `e39fb7a6cbe1755bf58cbd19db5c6e0ffdad2299` |
+
+固定入口为：
+
+```powershell
+node D:\project\harness-anything\packages\cli\dist\cli\src\index.js
+```
+
+provider daemon 已按该 build 启动，loaded/disk build id 一致且 `drifted=false`。provider 工作树
+有既有 `.gitignore` 修改，必须保留；它不属于 MI 或 target task 的可写范围。HA target 是包含目标
+源树、目标 Harness ledger 和 runtime 的稳定目标路径，不能用 source-only worktree 替代。
+
+## 历史 Bootstrap 记录（2026-08-29 起）
+
 本记录对应 2026-08-29 的 Phase 0 前置验证。此阶段只准备 Python 环境并固定/验证
 Harness Anything (HA) CLI 契约，不包含 MI 业务代码；fixture 是一次性临时仓库，不使用
 真实 GitHub 写权限。

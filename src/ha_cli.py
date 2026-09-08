@@ -170,7 +170,9 @@ class HaCliAdapter:
     def _run_json(self, root: Path, command: Sequence[str]) -> tuple[int, dict[str, Any], str]:
         if not root.is_absolute() or not root.is_dir():
             raise HaCliError("HA root must be an existing absolute directory")
-        argv = [str(self.config.executable), str(self.config.cli_entry), "--root", str(root), *command, "--json"]
+        # HA parses ``--root`` as a command option. Keep it after the command
+        # so meta commands such as ``version`` are not shadowed by the workspace path.
+        argv = [str(self.config.executable), str(self.config.cli_entry), *command, "--root", str(root), "--json"]
         env: dict[str, str] = {}
         if self.config.daemon_user_root is not None:
             if not self.config.daemon_user_root.is_absolute() or not self.config.daemon_user_root.is_dir():

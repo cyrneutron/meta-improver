@@ -36,29 +36,37 @@
 - 每次尝试记录 `base_commit`、输入快照哈希、模型/Prompt 版本、patch 哈希、测试结果、幂等键和回滚点。
 - self-evolve 首阶段只允许离线修改 L1 Prompt/规则；权限、审计、门禁、沙箱和凭据处理属于 immutable policy core。
 
-## 当前基线（2026-09-02）
+## 当前基线（2026-09-08）
 
-- HA commit：`e6ff3f1ab7b878d78583fd892305221c322be49e`
-- HA CLI version：`0.0.1`
-- CLI build id：`354028c2-1149-449d-abdc-0b07f81c386a`
-- Node.js：`24.18.0`
-- Python：使用 `/home/cyr/projects/meta-improver/.venv/bin/python`，版本 `3.12.14`
-- HA 本地 CLI：`/home/cyr/projects/harness-anything/packages/cli/dist/cli/src/index.js`（Node `/home/cyr/.nvm/versions/node/v24.18.0/bin/node`）
-- HA target commit：`241396c2c6730be1b5c2836c9ad08343657cfc05`
-- 详细 bootstrap 验证：见 [BOOTSTRAP.md](./BOOTSTRAP.md)
+MI 当前绑定的是 Windows 本地 provider/target，而不是早期 Linux 记录：
+
+- MI 源仓库：`D:\project\meta-improver`，当前分支 `main`。
+- HA provider：`D:\project\harness-anything`，HEAD `820b6a762577056ead69023259da0b84d7e7b84a`。
+- HA CLI version：`0.0.1`；CLI build id：`6c3fe263-49d5-437f-9f26-93165f5424f8`。
+- Node.js：`v24.11.1`；Python：`3.12.10`。
+- HA 本地 CLI：`D:\project\harness-anything\packages\cli\dist\cli\src\index.js`，
+  通过 Windows `node` 执行；provider daemon loaded/disk build id 一致，`drifted=false`。
+- HA target：`D:\project\ha-target`，当前分支
+  `codex/windows-provider-runtime-gui-20260908`，HEAD
+  `e39fb7a6cbe1755bf58cbd19db5c6e0ffdad2299`。
+- provider 工作树保留既有 `.gitignore` 修改；MI 不覆盖、不回退该修改。
+- 详细历史验证与当前 binding 记录：见 [BOOTSTRAP.md](./BOOTSTRAP.md)。
 
 不要依赖 PATH 中的全局 `ha`；它可能来自另一份 checkout。升级 HA 时必须重新记录 commit/build id 并重跑 contract/smoke tests。
 
 ## 双账本与源库边界
 
-当前 `/home/cyr/projects/harness-anything` 是一个干净的独立 clone，可作为 MI 的 HA 原材料和 CLI 构建来源；它目前没有 `harness/` 或 `.harness/`。其 `origin` 指向上游 `FairladyZ625/harness-anything`，`fork` 指向开发 Fork `cyrneutron/harness-anything`，但 MI 配置必须使用明确的仓库 URL，不依赖 remote 名称语义。
+当前 `D:\project\harness-anything` 是 MI 的稳定 CLI provider；它与
+`D:\project\ha-target` 分离。provider 的既有工作树修改必须保留，不能把 provider 当作候选实现目标。
+target 的源代码和独立 Harness 身份绑定在同一稳定路径中。MI 配置必须使用明确的绝对路径、仓库
+identity、ref 和 build stamp，不依赖 PATH 中的全局 `ha` 或 remote 名称语义。
 
 源库的公开提交可以通过该 clone 读取。每次 MI 处理 HA 任务时，应先记录源库 `base_commit`，再从上游同步/校验目标 checkout；候选变更只在目标 checkout 的临时 worktree 中进行。源库提交是代码基线，不是 MI 或 HA 的记忆来源。
 
 系统同时维护三类记忆，职责不能混淆：
 
 - **MI 项目的 `harness/`**：记录 MI 自身的开发任务、设计决策、事实、评审和结项。
-- **HA 目标项目的 `harness/`**：在 MI 第一次正式治理 HA 之前初始化；记录每个 HA 改进任务、复现事实、候选变更、验证证据、review 和 closeout。该目录是私有嵌套账本，不默认进入公开代码 PR。
+- **HA 目标项目的 `harness/`**：位于 `D:\project\ha-target`，记录每个 HA 改进任务、复现事实、候选变更、验证证据、review 和 closeout。该目录是私有嵌套账本，不默认进入公开代码 PR。
 - **MI 的 `.improver_history/history.db`**：记录所有候选 attempt（成功、失败、拒绝、重试）、模型/Prompt 版本、输入和 patch 哈希；这是 MI 的运行时经验库，不替代任一 HA 账本。
 
 2026-09-02 起，该 ledger 使用 schema v3：`attempts` 保留最新快照，`attempt_events` 保留追加式阶段证据。`ha squad-diagnose` 会将受控 Squad diagnosis 与一条可重放的 captured Attempt 绑定，后续 pipeline 使用同一 identity 推进 baseline、attribution、patch validation 和 acceptance。当前 diagnosis 命令以 diagnosis record hash 作为 handoff signal；已存在但无法反推上游 signal 的 6 条 diagnosis 不会被自动虚构成 Attempt。
@@ -71,8 +79,8 @@ MI 的每次目标改进都必须先形成目标绑定元组：项目稳定目�
 
 HA 使用两个彼此隔离的 checkout：
 
-- **CLI provider**：`/home/cyr/projects/harness-anything`。保持干净，只用于读取上游提交、构建并提供当前已晋升的稳定 `ha` CLI。它不初始化 HA 目标账本，也不承载 MI 的候选代码改动。
-- **HA target**：建议 `/home/cyr/projects/ha-target`。从 `cyrneutron/harness-anything` 克隆，并添加 `FairladyZ625/harness-anything` 为 upstream；在此目录初始化 HA 目标账本，MI 的候选分支和临时 worktree 从明确的 upstream base commit 创建。
+- **CLI provider**：`D:\project\harness-anything`。只提供当前已晋升的稳定 `ha` CLI；不承载 MI 候选改动。
+- **HA target**：`D:\project\ha-target`。承载目标项目源树、目标 Harness ledger 和本地 runtime；目标实现与目标 Harness 生命周期由目标项目 Harness agent/runtime 负责。
 
 MI 的治理写入始终调用 CLI provider 的稳定 CLI。若 MI 修改 HA CLI 本身，候选 CLI 只能在 HA target 的受控沙箱中构建和测试，不能负责裁决或记录自己的改动。
 
@@ -86,24 +94,50 @@ MI 的治理写入始终调用 CLI provider 的稳定 CLI。若 MI 修改 HA CLI
 
 单个 Attempt 从开始到完成必须绑定同一个 CLI provider commit/build id；运行中检测到 provider 漂移时 fail-closed，不能静默切换版本。
 
+## Squad 协作边界：追加式报告链
+
+当前 HA Squad 的协作基础是 worker terminal report、Leader callback 和后续新 attempt，不是
+worker 间实时消息。MI 的 Review/Verify 场景采用顺序多轮编排：
+
+```text
+Reviewer A report r1
+  -> Reviewer B report r1（读取并质疑 A r1）
+    -> Reviewer A report r2（读取 B r1 后复核）
+      -> Leader synthesis
+```
+
+每个 report 是一个不可变 artifact，绑定 worker attempt、round、reviewer、输入 report ref 和
+目标 source/Harness identity。后续 reviewer 只读取先前 artifact，并写入新的 artifact；禁止两个
+worker 并发原地覆盖同一个 report。Leader 在 callback 中读取 `resultRef` 和 `reportPath`，将前序
+报告的受控引用或正文纳入下一轮 prompt，并最终在唯一的 synthesis report 中给出裁决。
+
+这不是 Message Bus：当前不建设 worker 中途求助、Leader 对运行中 worker 的 live steering、
+跨 provider 的实时消息、共享 inbox/outbox，或 worker 失败后的 selective resume。worker 失败或
+无法推进时，继续采用 HA 现有的 `report -> Leader -> new worker attempt` 策略；是否重试、换模型、
+缩小任务或收敛由 Leader 在收到终态证据后决定。
+
+后续若实现 Review/Verify 轮次，只需要补充顺序依赖、report schema/reference validation，以及
+Leader 到下一轮 worker 的 prompt handoff 约定。只有出现无法通过终态 artifact 和新 attempt 解决的、
+有明确收益的交互场景时，才单独立项评估消息总线。
+
 ## Phase 0：项目与 HA 初始化
 
 1. 确认本目录是独立私有 Git 仓库，配置 Git author。
 2. 使用固定 HA 本地 CLI 初始化：
 
-   ```bash
-   node /home/cyr/projects/harness-anything/packages/cli/dist/cli/src/index.js \
-     --root /home/cyr/projects/meta-improver init \
-     --repo-id meta-improver \
-     --person-id <stable-person-id> \
-     --display-name "<display-name>" \
+   ```powershell
+   node D:\project\harness-anything\packages\cli\dist\cli\src\index.js `
+     --root D:\project\meta-improver init `
+     --repo-id meta-improver `
+     --person-id <stable-person-id> `
+     --display-name "<display-name>" `
      --name meta-improver --json
    ```
 
 3. 确认 `harness/`、`people.yaml`、`.harness/` 和 daemon registration 正常生成。
 4. 在临时 fixture 中验证 init、task create/show、fact record/search、`daemon projection rebuild`、`daemon status`。
 5. 初始化 MI 自己的 HA task，记录本阶段决策和验证事实；不要修改 HA 源码。
-6. MI 达到 Phase 2/3、具备只读诊断和受控沙箱能力后，在 `/home/cyr/projects/ha-target`（或等价独立 target clone）中初始化 HA 自己的 `harness/`；`/home/cyr/projects/harness-anything` 只保留为稳定 CLI provider。
+6. HA target 的 `harness/` 已存在于 `D:\project\ha-target`；后续目标任务必须复用该稳定目标身份，不能以 source-only worktree 替代它。`D:\project\harness-anything` 保持为稳定 CLI provider。
 
 ## Phase 1：骨架与数据契约
 

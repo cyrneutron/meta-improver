@@ -32,7 +32,7 @@ app.add_typer(ha_app, name="ha")
 app.add_typer(target_app, name="target")
 
 DEFAULT_HA_CLI_VERSION = "0.0.1"
-DEFAULT_HA_CLI_BUILD_ID = "354028c2-1149-449d-abdc-0b07f81c386a"
+DEFAULT_HA_CLI_BUILD_ID = "6c3fe263-49d5-437f-9f26-93165f5424f8"
 
 
 def _adapter(

@@ -14,6 +14,16 @@ class BoundedProcessError(RuntimeError):
     """A process exceeded its execution or combined-output budget."""
 
 
+def _child_environment(env: Mapping[str, str]) -> dict[str, str]:
+    """Keep the explicit environment hermetic while satisfying Windows startup."""
+    child_env = dict(env)
+    if os.name == "nt":
+        system_root = os.environ.get("SystemRoot")
+        if system_root:
+            child_env["SystemRoot"] = system_root
+    return child_env
+
+
 def run_bounded_process(
     argv: Sequence[str],
     *,
@@ -28,7 +38,7 @@ def run_bounded_process(
         raise ValueError("max_output_bytes must be a positive integer")
     deadline = time.monotonic() + timeout_seconds
     process = subprocess.Popen(
-        list(argv), cwd=cwd, env=dict(env), stdin=subprocess.DEVNULL,
+        list(argv), cwd=cwd, env=_child_environment(env), stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=False,
     )
     assert process.stdout is not None and process.stderr is not None
