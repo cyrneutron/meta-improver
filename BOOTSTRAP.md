@@ -12,8 +12,8 @@
 |---|---|
 | MI source root | `D:\project\meta-improver` |
 | HA provider | `D:\project\harness-anything` |
-| Provider HEAD | `820b6a762577056ead69023259da0b84d7e7b84a` |
-| CLI version / build id | `0.0.1` / `6c3fe263-49d5-437f-9f26-93165f5424f8` |
+| Provider HEAD | `ff0caa80487a063ec203f13a64aad8539d03ac53` |
+| CLI version / build id | `0.0.1` / `0138c112-a20d-4801-9d7f-d1591e18e249` |
 | Node / Python | `v24.11.1` / `3.12.10` |
 | HA target | `D:\project\ha-target` |
 | Target branch / HEAD | `codex/windows-provider-runtime-gui-20260908` / `e39fb7a6cbe1755bf58cbd19db5c6e0ffdad2299` |
@@ -27,6 +27,19 @@ node D:\project\harness-anything\packages\cli\dist\cli\src\index.js
 provider daemon 已按该 build 启动，loaded/disk build id 一致且 `drifted=false`。provider 工作树
 有既有 `.gitignore` 修改，必须保留；它不属于 MI 或 target task 的可写范围。HA target 是包含目标
 源树、目标 Harness ledger 和 runtime 的稳定目标路径，不能用 source-only worktree 替代。
+
+## Provider refresh record（2026-09-08）
+
+本次 provider refresh 将 `origin/main` 从旧绑定 `820b6a762577056ead69023259da0b84d7e7b84a`
+快进到 `ff0caa80487a063ec203f13a64aad8539d03ac53`。旧 commit/build 只作为本次升级前的
+历史输入保留，不再作为当前运行身份。执行 `npm ci` 和 CLI build 后，最终 disk build id 为
+`0138c112-a20d-4801-9d7f-d1591e18e249`；daemon PID `45552` 已加载同一 commit/build，
+`drifted=false`，provider、target 和 MI 三个 RepoCell 均 attached。
+
+provider `typecheck` 与 `lint` 通过。Windows 本机运行 fast/contract 测试时仍有已分类的
+环境限制：Unix-only `sh`/`rsync`、Unix 路径和平台探针断言、临时 Unix socket 权限，以及
+临时目录清理 `EPERM`；fast/contract 的真实失败结果不视为 CI 通过，也不回滚 provider
+升级。后续 Windows 测试修复另由目标项目任务处理。
 
 ## 历史 Bootstrap 记录（2026-08-29 起）
 

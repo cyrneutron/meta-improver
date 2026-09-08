@@ -41,8 +41,8 @@
 MI 当前绑定的是 Windows 本地 provider/target，而不是早期 Linux 记录：
 
 - MI 源仓库：`D:\project\meta-improver`，当前分支 `main`。
-- HA provider：`D:\project\harness-anything`，HEAD `820b6a762577056ead69023259da0b84d7e7b84a`。
-- HA CLI version：`0.0.1`；CLI build id：`6c3fe263-49d5-437f-9f26-93165f5424f8`。
+- HA provider：`D:\project\harness-anything`，HEAD `ff0caa80487a063ec203f13a64aad8539d03ac53`。
+- HA CLI version：`0.0.1`；CLI build id：`0138c112-a20d-4801-9d7f-d1591e18e249`。
 - Node.js：`v24.11.1`；Python：`3.12.10`。
 - HA 本地 CLI：`D:\project\harness-anything\packages\cli\dist\cli\src\index.js`，
   通过 Windows `node` 执行；provider daemon loaded/disk build id 一致，`drifted=false`。

@@ -10,8 +10,8 @@
 6. `D:\project\harness-anything\docs-release\architecture\zh\04-gates-in-the-pipeline.md`
 
 当前已验证的基线（2026-09-08）：HA provider 为 `D:\project\harness-anything`，commit 为
-`820b6a762577056ead69023259da0b84d7e7b84a`，CLI version 为 `0.0.1`，build id 为
-`6c3fe263-49d5-437f-9f26-93165f5424f8`；Windows Node 为 `v24.11.1`，Python 为 `3.12.10`。
+`ff0caa80487a063ec203f13a64aad8539d03ac53`，CLI version 为 `0.0.1`，build id 为
+`0138c112-a20d-4801-9d7f-d1591e18e249`；Windows Node 为 `v24.11.1`，Python 为 `3.12.10`。
 HA target 为 `D:\project\ha-target`，分支为 `codex/windows-provider-runtime-gui-20260908`，commit
 为 `e39fb7a6cbe1755bf58cbd19db5c6e0ffdad2299`。优先调用
 `D:\project\harness-anything\packages\cli\dist\cli\src\index.js`，不要依赖 PATH 中的全局 `ha`。
