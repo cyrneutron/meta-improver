@@ -10,6 +10,16 @@ from .contracts import (
     ResidualRisk,
     TestEvidence,
 )
+from .report_chain import (
+    ReportArtifact,
+    ReportChain,
+    ReportChainError,
+    ReportEvidence,
+    ReportFinding,
+    append_report,
+    rehydrate_report_artifact,
+    rehydrate_report_chain,
+)
 
 __all__ = [
     "Attempt",
@@ -20,4 +30,12 @@ __all__ = [
     "PatchFile",
     "ResidualRisk",
     "TestEvidence",
+    "ReportArtifact",
+    "ReportChain",
+    "ReportChainError",
+    "ReportEvidence",
+    "ReportFinding",
+    "append_report",
+    "rehydrate_report_artifact",
+    "rehydrate_report_chain",
 ]
