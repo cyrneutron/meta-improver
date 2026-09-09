@@ -224,11 +224,7 @@ def target_publish(
     gh_executable: Annotated[Path, typer.Option(exists=True, dir_okay=False, resolve_path=True)],
     gh_sha256: Annotated[str, typer.Option()],
     github_home: Annotated[Path, typer.Option(exists=True, file_okay=False, resolve_path=True)],
-    admission_file: Annotated[Path | None, typer.Option(exists=True, dir_okay=False, resolve_path=True)] = None,
-    repository: Annotated[str | None, typer.Option(hidden=True)] = None,
-    target_task_id: Annotated[str | None, typer.Option(hidden=True)] = None,
-    accepted_execution_id: Annotated[str | None, typer.Option(hidden=True)] = None,
-    accepted_commit: Annotated[str | None, typer.Option(hidden=True)] = None,
+    admission_file: Annotated[Path, typer.Option(exists=True, dir_okay=False, resolve_path=True)],
     title: Annotated[str | None, typer.Option()] = None,
     body_file: Annotated[Path | None, typer.Option(exists=True, dir_okay=False, resolve_path=True)] = None,
     ledger_path: Annotated[Path | None, typer.Option("--ledger", dir_okay=False, resolve_path=True)] = None,
@@ -242,8 +238,6 @@ def target_publish(
     """
 
     try:
-        if admission_file is None:
-            raise TargetPublicationError("--admission-file is required; free-form accepted SHA admission is disabled")
         if title is None or body_file is None:
             raise TargetPublicationError("--title and --body-file are required")
         admission = CandidateAcceptanceAdmission.model_validate_json(admission_file.read_text(encoding="utf-8"))
