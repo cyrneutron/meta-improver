@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Mapping
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -30,7 +31,9 @@ def _digest(value: Any) -> str:
 def _redact_input(value: Any) -> Any:
     if isinstance(value, BaseModel):
         return _redact_input(value.model_dump(mode="python", by_alias=True))
-    if isinstance(value, dict):
+    if isinstance(value, (set, frozenset)):
+        raise ValueError("unordered report input is not supported")
+    if isinstance(value, Mapping):
         return redact({key: _redact_input(item) for key, item in value.items()})
     if isinstance(value, list):
         return [_redact_input(item) for item in value]
@@ -68,6 +71,11 @@ class ReportEvidence(BaseModel):
     kind: Literal["source", "test", "artifact", "decision", "report"]
     summary: str = Field(min_length=1, max_length=2_000)
 
+    @model_validator(mode="before")
+    @classmethod
+    def redact_evidence_input(cls, value: Any) -> Any:
+        return _redact_input(value)
+
     @field_validator("*", mode="before")
     @classmethod
     def reject_control_input(cls, value: Any, info: Any) -> Any:
@@ -91,6 +99,11 @@ class ReportFinding(BaseModel):
     assessment: str = Field(min_length=1, max_length=8_000)
     severity: Literal["low", "medium", "high", "critical"]
     evidence_refs: tuple[str, ...] = Field(default_factory=tuple, max_length=100)
+
+    @model_validator(mode="before")
+    @classmethod
+    def redact_finding_input(cls, value: Any) -> Any:
+        return _redact_input(value)
 
     @field_validator("*", mode="before")
     @classmethod

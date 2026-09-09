@@ -162,6 +162,15 @@ def test_nested_report_input_is_redacted_and_control_fields_are_rejected() -> No
             severity="low",
         )
     with pytest.raises(ValidationError):
+        ReportFinding(
+            claim_id="claim-a-r1",
+            assessment="assessment",
+            severity="low",
+            evidence_refs={secret + "\n"},
+        )
+    with pytest.raises(ValidationError):
+        report("a-r1", "reviewer_a", 1, challenged_claims={secret})
+    with pytest.raises(ValidationError):
         report("a-r1", "reviewer_a", 1, source_identity="source\nidentity")
     with pytest.raises(ValidationError):
         report("a-r1", "reviewer_a", 1, summary="x" * 8_001)
