@@ -45,6 +45,16 @@ def _safe_text(value: str, field_name: str, *, max_length: int) -> str:
     return value
 
 
+def _reject_control_input(value: Any, field_name: str) -> Any:
+    if isinstance(value, str):
+        if _CONTROL.search(value):
+            raise ValueError(f"{field_name} contains control characters")
+        return value
+    if isinstance(value, (list, tuple)):
+        return tuple(_reject_control_input(item, field_name) for item in value)
+    return value
+
+
 class ReportChainError(ValueError):
     """Raised when an append-only report chain cannot be trusted."""
 
@@ -55,6 +65,11 @@ class ReportEvidence(BaseModel):
     ref: str = Field(min_length=1, max_length=500)
     kind: Literal["source", "test", "artifact", "decision", "report"]
     summary: str = Field(min_length=1, max_length=2_000)
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def reject_control_input(cls, value: Any, info: Any) -> Any:
+        return _reject_control_input(value, info.field_name)
 
     @field_validator("ref")
     @classmethod
@@ -74,6 +89,11 @@ class ReportFinding(BaseModel):
     assessment: str = Field(min_length=1, max_length=8_000)
     severity: Literal["low", "medium", "high", "critical"]
     evidence_refs: tuple[str, ...] = Field(default_factory=tuple, max_length=100)
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def reject_control_input(cls, value: Any, info: Any) -> Any:
+        return _reject_control_input(value, info.field_name)
 
     @field_validator("claim_id")
     @classmethod
@@ -125,6 +145,11 @@ class ReportArtifact(BaseModel):
     evidence: tuple[ReportEvidence, ...] = Field(default_factory=tuple, max_length=200)
     open_disagreements: tuple[str, ...] = Field(default_factory=tuple, max_length=100)
     report_hash: str | None = Field(default=None, pattern=_HASH.pattern)
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def reject_control_input(cls, value: Any, info: Any) -> Any:
+        return _reject_control_input(value, info.field_name)
 
     @model_validator(mode="before")
     @classmethod
