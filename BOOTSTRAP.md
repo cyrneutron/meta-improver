@@ -1,5 +1,92 @@
 # Meta-Improver Bootstrap
 
+> 本文件保留 2026-08-29 至 2026-09-04 的 Linux bootstrap 和 provider 晋升历史作为审计证据。
+> 它们不是当前运行绑定；发生冲突时，以紧随其后的 2026-09-09 Windows provider binding 和
+> `PLAN.md` 当前基线为准。
+
+## 当前 Windows provider binding（2026-09-09）
+
+本次在本机实际核对的当前运行基线如下：
+
+| 项目 | 当前值 |
+|---|---|
+| MI source root | `D:\project\meta-improver` |
+| HA provider | `D:\project\harness-anything` |
+| Provider HEAD | `c4330a85d06ed3a650965b26cb86d0aad49edc48` |
+| CLI version / build id | `0.0.1` / `1942211c-e727-4c18-867a-268bba08ba12` |
+| Node / Python | `v24.11.1` / `3.12.10` |
+| HA target | `D:\project\ha-target` |
+| Target branch / HEAD | `codex/ha-target-latest-20260909` / `c4330a85d06ed3a650965b26cb86d0aad49edc48`，与 `upstream/main` 相同 |
+
+固定入口为：
+
+```powershell
+node D:\project\harness-anything\packages\cli\dist\cli\src\index.js
+```
+
+provider daemon 已按该 build 启动，loaded/disk commit 与 build id 一致且 `drifted=false`；固定入口
+`--version` 返回 `0.0.1`。provider 工作树有既有 `.gitignore` 修改，必须保留；它不属于 MI 或
+target task 的可写范围。HA target 是包含目标源树、目标 Harness ledger 和 runtime 的稳定目标路径，
+不能用 source-only worktree 替代。
+
+## Provider refresh record（2026-09-09，c433）
+
+本轮 provider refresh 将 `D:\project\harness-anything` 的 `main` 从上一轮绑定
+`e42c2149abd32845953401778d7d82fa55bcfa5b` 快进到已核验的 `origin/main`
+`c4330a85d06ed3a650965b26cb86d0aad49edc48`。快进没有覆盖 provider 既有 `.gitignore` 改动；
+CLI build stamp 为 `1942211c-e727-4c18-867a-268bba08ba12`。
+
+- 固定入口 `node D:\project\harness-anything\packages\cli\dist\cli\src\index.js --root D:\project\meta-improver daemon status --json`
+  返回 provider commit `c4330a85...`、loaded/disk build `1942211c...`、`drifted=false`，PID
+  `26392`；provider、`D:\project\ha-target` 和 MI 三个 RepoCell 均 `attached`，queue depth 均为 0。
+- provider `npm run typecheck` 通过，`npm run lint` 通过；fast/contract 共 `1037` 项，`1035`
+  passed、`0` failed、`2` 个显式 POSIX symlink capability skips。skip 是 Windows 能力事实，
+  不是 CI 通过。
+- `D:\project\ha-target` 的 `codex/ha-target-latest-20260909` 已 fast-forward 到
+  `c4330a85...`，tracked worktree clean；嵌套项目 Harness repository 仍为
+  `master@7265dd064f2a1877527c8b04b400ef367c1309f3`。目标 Harness runtime 的启动 dispatch
+  仍未形成目标 task execution，MI 未写入目标 `harness/` 或 `.harness`。
+- MI binding task 为 `task_f6b4284dc71c8fe5dac71ed9a3`，execution 为
+  `exe_bdc619f6d1c798009cc398efcf`；本轮没有 push、PR、merge 或自动合入，外部 CI、独立
+  review 和 owner consent 仍是后续门禁。
+
+## Provider refresh record（2026-09-09，e42 historical）
+
+本次 provider refresh 将 `D:\project\harness-anything` 的 `main` 从旧绑定
+`ff0caa80487a063ec203f13a64aad8539d03ac53` 快进到已核验的
+`origin/main` `e42c2149abd32845953401778d7d82fa55bcfa5b`。快进没有覆盖 provider 既有
+`.gitignore` 改动；`npm ci` 完成，post-merge hook 重建 CLI/GUI，CLI disk build id 为
+`3c95579e-7331-44e6-920a-b2c0e6f331f3`。
+
+- provider daemon status：PID `6660`，`entry=dist`，loaded commit 为
+  `e42c2149abd32845953401778d7d82fa55bcfa5b`；MI 真实 `ha check` 需继续作为 build/drift
+  的最终绑定证据。
+- provider typecheck：通过；provider lint：通过。
+- `npm test -- --tier fast --tier contract`：1037 tests，1035 passed，0 failed，2 skipped；
+  两项 skip 的明确理由是 `requires POSIX file-symbolic-link semantics`，不是静默跳过。
+- `D:\project\ha-target` 的同步 runtime dispatch 在启动进程前失败，未创建目标 task、未写入目标
+  ledger；随后在 daemon `queueDepth=0`、RepoCell attached 且 tracked worktree clean 的条件下，
+  MI 仅执行 source-only ref 切换到 `codex/ha-target-latest-20260909`。旧分支
+  `codex/windows-provider-runtime-gui-20260908` / `e39fb7a6...` 仍可恢复，嵌套 Harness
+  `ha-target-identity-merge` 的 HEAD `7265dd064f2a1877527c8b04b400ef367c1309f3` 未变。
+- 这不是目标项目 task execution；MI 未写入 `D:\project\ha-target\harness` 或 `.harness`。
+- 本轮没有 push、PR、merge 或自动合入；外部 CI 和独立 review 仍是后续门禁。
+
+## Provider refresh record（2026-09-08）
+
+本次 provider refresh 将 `origin/main` 从旧绑定 `820b6a762577056ead69023259da0b84d7e7b84a`
+快进到 `ff0caa80487a063ec203f13a64aad8539d03ac53`。旧 commit/build 只作为本次升级前的
+历史输入保留，不再作为当前运行身份。执行 `npm ci` 和 CLI build 后，最终 disk build id 为
+`0138c112-a20d-4801-9d7f-d1591e18e249`；daemon PID `45552` 已加载同一 commit/build，
+`drifted=false`，provider、target 和 MI 三个 RepoCell 均 attached。
+
+provider `typecheck` 与 `lint` 通过。Windows 本机运行 fast/contract 测试时仍有已分类的
+环境限制：Unix-only `sh`/`rsync`、Unix 路径和平台探针断言、临时 Unix socket 权限，以及
+临时目录清理 `EPERM`；fast/contract 的真实失败结果不视为 CI 通过，也不回滚 provider
+升级。后续 Windows 测试修复另由目标项目任务处理。
+
+## 历史 Bootstrap 记录（2026-08-29 起）
+
 本记录对应 2026-08-29 的 Phase 0 前置验证。此阶段只准备 Python 环境并固定/验证
 Harness Anything (HA) CLI 契约，不包含 MI 业务代码；fixture 是一次性临时仓库，不使用
 真实 GitHub 写权限。

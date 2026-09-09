@@ -1,33 +1,52 @@
 # MI Codex 启动提示词
 
-你现在负责在 `/home/cyr/projects/meta-improver` 实施 Meta-Improver。开始任何代码工作前，必须完整阅读：
+你现在负责在 `D:\project\meta-improver` 实施 Meta-Improver。开始任何代码工作前，必须按需阅读：
 
 1. `PLAN.md`
 2. `BOOTSTRAP.md`
-3. `/home/cyr/projects/harness-anything/docs-release/start/zh/02-first-loop.md`
-4. `/home/cyr/projects/harness-anything/docs-release/architecture/zh/02-write-path.md`
-5. `/home/cyr/projects/harness-anything/docs-release/architecture/zh/03-projection.md`
-6. `/home/cyr/projects/harness-anything/docs-release/architecture/zh/04-gates-in-the-pipeline.md`
+3. `D:\project\harness-anything\docs-release\start\zh\02-first-loop.md`
+4. `D:\project\harness-anything\docs-release\architecture\zh\02-write-path.md`
+5. `D:\project\harness-anything\docs-release\architecture\zh\03-projection.md`
+6. `D:\project\harness-anything\docs-release\architecture\zh\04-gates-in-the-pipeline.md`
 
-当前已验证的基线：HA commit 为 `e6ff3f1ab7b878d78583fd892305221c322be49e`，CLI build id 为 `354028c2-1149-449d-abdc-0b07f81c386a`，Python 使用 `/home/cyr/projects/meta-improver/.venv/bin/python`（3.12.14）。优先调用 `/home/cyr/projects/harness-anything/packages/cli/dist/cli/src/index.js`，不要依赖 PATH 中可能指向其他 checkout 的全局 `ha`。
+当前已验证的基线（2026-09-09）：HA provider 为 `D:\project\harness-anything`，commit 为
+`c4330a85d06ed3a650965b26cb86d0aad49edc48`，CLI version 为 `0.0.1`，build id 为
+`1942211c-e727-4c18-867a-268bba08ba12`；Windows Node 为 `v24.11.1`，Python 为 `3.12.10`。
+HA target 为 `D:\project\ha-target`，当前 branch 为 `codex/ha-target-latest-20260909`，HEAD 为
+`c4330a85d06ed3a650965b26cb86d0aad49edc48`，与已核验的 `upstream/main` 相同；旧分支
+`codex/windows-provider-runtime-gui-20260908` 仍保留。目标项目源码、测试和 Harness 生命周期
+仍由目标 Harness agent/runtime 执行；此前 runtime 启动失败后的受控 source ref fast-forward 不等于
+目标 task execution，不能伪造为 agent 已完成。
+优先调用
+`D:\project\harness-anything\packages\cli\dist\cli\src\index.js`，不要依赖 PATH 中的全局 `ha`。
 
-当前 `/home/cyr/projects/harness-anything` 是稳定 CLI provider：保持干净，只负责读取上游提交和提供已晋升的 `ha` CLI，不初始化目标账本，也不承载候选改动。公开源库提交可以从其 `origin` 读取。MI 自己的 `harness/` 负责 MI 开发记忆；等 MI 达到 Phase 2/3、第一次正式治理 HA 之前，再在 `/home/cyr/projects/ha-target`（或等价独立 target clone）中初始化 HA 的 `harness/`。MI 的 `.improver_history/history.db` 记录所有候选 attempt，不能替代任一 `harness/`。
+`D:\project\harness-anything` 是稳定 CLI provider，保留其既有 `.gitignore` 修改，不作为候选实现
+target。`D:\project\ha-target` 是带独立 Harness ledger 和 runtime 的稳定目标路径；目标源码、测试和
+目标 Harness 生命周期由该项目 Harness agent/runtime 负责。MI 只负责 target binding、跨项目编排、
+证据门禁、publication 约束和人工审阅交接。MI 自己的 `harness/` 负责 MI 开发记忆；
+`.improver_history/history.db` 记录 candidate attempt，不能替代任一 Harness ledger。
 
 若未来 MI 修改 HA CLI，治理写入必须继续使用 provider 的稳定版本；候选 CLI 只在 target 沙箱中构建和测试。候选经本地检查、GitHub Actions、独立 review 和 maintainer 合入后，provider 才允许 fast-forward、重建、重跑 contract smoke 并晋升新 build id。单个 Attempt 期间禁止静默切换 provider 版本。
 
-你的第一轮任务只做 Phase 0 和 Phase 1：
+当前 Squad 协作采用追加式报告链，而非实时消息：Reviewer A 的 report r1 由 Reviewer B 读取并
+生成 report r1，随后可派发新的 Reviewer A attempt 生成 report r2，最后由 Leader synthesis。每份
+report 必须独立、不可变、绑定 attempt/round/input refs；禁止并发覆盖同一文件。当前不实现 worker
+中途求助、Leader live steering、跨 provider 消息、共享 inbox/outbox 或 worker selective resume；
+worker 失败继续使用 `report -> Leader -> new worker attempt`。
 
-- 检查并完善 MI 外层 Git、Python/uv 环境和 `pyproject.toml`/`uv.lock`。
-- 在 MI 根目录初始化 HA：使用当前 CLI 的 `--repo-id`、`--person-id`、`--display-name` 参数，不能在 `harness-anything` 源码目录执行 init。
-- 验证 `harness/`、`people.yaml`、`.harness/`、daemon registration 和基本 task/fact/projection smoke。
-- 用 HA 账本记录本轮 task、事实、决策和验证证据；不要手写状态字段。
-- 完成后再实现最小配置模型、Pydantic 数据契约和 SQLite 经验账本，带单元测试和迁移/幂等测试。
+执行任务时：
 
-不要在第一轮初始化 HA 的目标项目账本；那一步属于 MI 具备只读诊断和受控沙箱能力之后的后续阶段。届时必须使用独立目标 clone/worktree，先记录 HA 源库 `base_commit`，再为每个正式改进创建 HA task 和验证证据。
+- 按当前 task plan 确定最小改动面；只有任务明确要求时才修改 MI 环境或依赖元数据。
+- 在 MI 根目录使用 provider 的固定 CLI；不要在 provider 源码目录执行 MI init 或目标实现。
+- 任务开始前读取 `harness/harness.yaml`、对应 task `task_plan.md` 和其点名文件；machine-readable
+  lifecycle 与 relation 使用 `ha` 命令写入，作者文档使用 doc-sync。
+- 目标项目操作必须在 `D:\project\ha-target` 的稳定 target identity 下由项目 Harness agent/runtime
+  执行；不要替换、重置或直接写目标 Harness ledger。
+- 将每次 MI Attempt 绑定到同一 provider commit/build id；发生 provider drift 时 fail-closed。
 
 严格边界：
 
-- 不实现 CI/Issue 自动修复、proposal PR、daemon 常驻或 self-evolve，直到对应 Phase 到位。
+- 不把 report-driven 审核实现误扩展为消息总线或 CLI session 注入能力。
 - 不自动 push、创建 PR 或合入 `main`。
 - 不修改 HA 源码，不把 `.harness` 投影当成真相源。
 - 不执行未经容器隔离的目标仓库代码；不读取或写入 secrets。

@@ -23,7 +23,7 @@ from src.storage import Ledger
 
 BUILD = "build-123"
 CURRENT_VERSION = "0.0.1"
-CURRENT_BUILD_ID = "354028c2-1149-449d-abdc-0b07f81c386a"
+CURRENT_BUILD_ID = "1942211c-e727-4c18-867a-268bba08ba12"
 
 
 class FixtureTransport:
@@ -55,7 +55,8 @@ def test_adapter_uses_argv_empty_environment_and_validates_receipt(tmp_path: Pat
     ])
     receipt = HaCliAdapter(_config(tmp_path), transport).squad_list(tmp_path)
     assert receipt.status is HaCliStatus.SUCCEEDED
-    assert transport.calls[1][0][-3:] == ["squad", "list", "--json"]
+    assert transport.calls[0][0][-4:] == ["version", "--root", str(tmp_path), "--json"]
+    assert transport.calls[1][0][-5:] == ["squad", "list", "--root", str(tmp_path), "--json"]
     assert transport.calls[1][1]["env"] == {}
     assert transport.calls[1][1]["timeout_seconds"] == 30
 
@@ -89,8 +90,8 @@ def test_squad_run_uses_fixed_argv_and_repository_relative_cwd(tmp_path: Path) -
         tmp_path, "squad-1", "instance-1", "src/work", "task-1", "prompt-1"
     )
     assert receipt.status is HaCliStatus.SUCCEEDED
-    assert transport.calls[1][0][-14:] == [
-        "squad", "run", "squad-1", "--instance", "instance-1", "--cwd", "src/work", "--permission-mode", "read-only", "--task", "task-1", "--prompt", "prompt-1", "--json"
+    assert transport.calls[1][0][-16:] == [
+        "squad", "run", "squad-1", "--instance", "instance-1", "--cwd", "src/work", "--permission-mode", "read-only", "--task", "task-1", "--prompt", "prompt-1", "--root", str(tmp_path), "--json"
     ]
     assert transport.calls[1][1]["env"] == {}
 

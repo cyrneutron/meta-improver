@@ -66,7 +66,26 @@ This file contains stable repository operating rules. Current milestone state an
 
 ## Repository Specifics
 
-Repository-specific rules may be added here after explicit diagnosis; the deterministic base and vertical overlay above remain unchanged.
+### Terminology and Execution Routing
+
+Do not use "HA repository" without a project qualifier. Use these terms:
+
+- MI source repository: the Git repository containing Meta-Improver code.
+- MI Harness repository: MI's own nested harness ledger and canonical project memory.
+- <project> source repository: the project's code Git repository, including its remotes and refs.
+- <project> Harness repository: the project's independent nested harness ledger, runtime state, and local coordination records.
+- <project> stable target path: the authoritative checkout that keeps the project's source tree and its Harness identity together.
+- project Harness agent/runtime: the executor attached to that project's stable target path and Harness ledger. It is not an alias for the current MI conversation or for MI itself.
+
+Use an explicit binding sentence when discussing an operation:
+
+> In <project>'s stable target path <absolute-path>, the project Harness agent/runtime executes the project task; MI verifies source synchronization, target Harness identity, evidence gates, publication constraints, and human-review handoff.
+
+Use an explicit dispatch sentence when handing work to another executor:
+
+> Dispatch this task to the <project> Harness agent/runtime in <absolute-path>; preserve the nested Harness ledger and local runtime state, and return the project task execution, commit, test evidence, review state, and residual risks to MI.
+
+Ownership is strict: MI may supervise and verify, but must not directly write a target project's Harness ledger. A source-only linked worktree is an implementation workspace, never a replacement for the project's stable target identity.
 
 ## Execution Cadence
 
