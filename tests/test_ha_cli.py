@@ -23,7 +23,7 @@ from src.storage import Ledger
 
 BUILD = "build-123"
 CURRENT_VERSION = "0.0.1"
-CURRENT_BUILD_ID = "3c95579e-7331-44e6-920a-b2c0e6f331f3"
+CURRENT_BUILD_ID = "1942211c-e727-4c18-867a-268bba08ba12"
 
 
 class FixtureTransport:

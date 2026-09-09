@@ -40,19 +40,19 @@
 
 MI 当前绑定的是 Windows 本地 provider/target，而不是早期 Linux 记录：
 
-- MI 源仓库：`D:\project\meta-improver`，当前分支 `main`。
-- HA provider：`D:\project\harness-anything`，HEAD `e42c2149abd32845953401778d7d82fa55bcfa5b`。
-- HA CLI version：`0.0.1`；CLI build id：`3c95579e-7331-44e6-920a-b2c0e6f331f3`。
+- MI 源仓库：`D:\project\meta-improver`，当前分支 `codex/immutable-report-chain-contract`。
+- HA provider：`D:\project\harness-anything`，HEAD `c4330a85d06ed3a650965b26cb86d0aad49edc48`。
+- HA CLI version：`0.0.1`；CLI build id：`1942211c-e727-4c18-867a-268bba08ba12`。
 - Node.js：`v24.11.1`；Python：`3.12.10`。
 - HA 本地 CLI：`D:\project\harness-anything\packages\cli\dist\cli\src\index.js`，
   通过 Windows `node` 执行；provider daemon loaded/disk build id 一致，`drifted=false`。
 - HA target：`D:\project\ha-target`，当前源库分支
   `codex/ha-target-latest-20260909`，HEAD 与 `upstream/main` 均为
-  `e42c2149abd32845953401778d7d82fa55bcfa5b`；旧分支
+  `c4330a85d06ed3a650965b26cb86d0aad49edc48`；旧分支
   `codex/windows-provider-runtime-gui-20260908` 及其 `e39fb7a6...` 仍保留。
 - 目标同步未形成新的目标 task execution：目标 Harness runtime 在启动进程前失败，随后 MI
-  在 daemon `queueDepth=0` 且目标 RepoCell attached 的条件下只执行了 source-only Git ref
-  切换，未写入目标 `harness/` 或 `.harness`。
+  在 daemon `queueDepth=0` 且目标 RepoCell attached 的条件下执行了受控 source ref fast-forward，
+  未写入目标 `harness/` 或 `.harness`；嵌套项目 Harness identity 保持不变。
 - 目标项目后续源码、测试和 Harness 生命周期仍由该项目 Harness agent/runtime 负责；MI 只做
   身份、同步和证据核验。
 - provider 工作树保留既有 `.gitignore` 修改；MI 不覆盖、不回退该修改。

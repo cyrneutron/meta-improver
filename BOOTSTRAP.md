@@ -12,11 +12,11 @@
 |---|---|
 | MI source root | `D:\project\meta-improver` |
 | HA provider | `D:\project\harness-anything` |
-| Provider HEAD | `e42c2149abd32845953401778d7d82fa55bcfa5b` |
-| CLI version / build id | `0.0.1` / `3c95579e-7331-44e6-920a-b2c0e6f331f3` |
+| Provider HEAD | `c4330a85d06ed3a650965b26cb86d0aad49edc48` |
+| CLI version / build id | `0.0.1` / `1942211c-e727-4c18-867a-268bba08ba12` |
 | Node / Python | `v24.11.1` / `3.12.10` |
 | HA target | `D:\project\ha-target` |
-| Target branch / HEAD | `codex/ha-target-latest-20260909` / `e42c2149abd32845953401778d7d82fa55bcfa5b`，与 `upstream/main` 相同 |
+| Target branch / HEAD | `codex/ha-target-latest-20260909` / `c4330a85d06ed3a650965b26cb86d0aad49edc48`，与 `upstream/main` 相同 |
 
 固定入口为：
 
@@ -24,11 +24,33 @@
 node D:\project\harness-anything\packages\cli\dist\cli\src\index.js
 ```
 
-provider daemon 已按该 build 启动，loaded/disk build id 一致且 `drifted=false`。provider 工作树
-有既有 `.gitignore` 修改，必须保留；它不属于 MI 或 target task 的可写范围。HA target 是包含目标
-源树、目标 Harness ledger 和 runtime 的稳定目标路径，不能用 source-only worktree 替代。
+provider daemon 已按该 build 启动，loaded/disk commit 与 build id 一致且 `drifted=false`；固定入口
+`--version` 返回 `0.0.1`。provider 工作树有既有 `.gitignore` 修改，必须保留；它不属于 MI 或
+target task 的可写范围。HA target 是包含目标源树、目标 Harness ledger 和 runtime 的稳定目标路径，
+不能用 source-only worktree 替代。
 
-## Provider refresh record（2026-09-09）
+## Provider refresh record（2026-09-09，c433）
+
+本轮 provider refresh 将 `D:\project\harness-anything` 的 `main` 从上一轮绑定
+`e42c2149abd32845953401778d7d82fa55bcfa5b` 快进到已核验的 `origin/main`
+`c4330a85d06ed3a650965b26cb86d0aad49edc48`。快进没有覆盖 provider 既有 `.gitignore` 改动；
+CLI build stamp 为 `1942211c-e727-4c18-867a-268bba08ba12`。
+
+- 固定入口 `node D:\project\harness-anything\packages\cli\dist\cli\src\index.js --root D:\project\meta-improver daemon status --json`
+  返回 provider commit `c4330a85...`、loaded/disk build `1942211c...`、`drifted=false`，PID
+  `26392`；provider、`D:\project\ha-target` 和 MI 三个 RepoCell 均 `attached`，queue depth 均为 0。
+- provider `npm run typecheck` 通过，`npm run lint` 通过；fast/contract 共 `1037` 项，`1035`
+  passed、`0` failed、`2` 个显式 POSIX symlink capability skips。skip 是 Windows 能力事实，
+  不是 CI 通过。
+- `D:\project\ha-target` 的 `codex/ha-target-latest-20260909` 已 fast-forward 到
+  `c4330a85...`，tracked worktree clean；嵌套项目 Harness repository 仍为
+  `master@7265dd064f2a1877527c8b04b400ef367c1309f3`。目标 Harness runtime 的启动 dispatch
+  仍未形成目标 task execution，MI 未写入目标 `harness/` 或 `.harness`。
+- MI binding task 为 `task_f6b4284dc71c8fe5dac71ed9a3`，execution 为
+  `exe_bdc619f6d1c798009cc398efcf`；本轮没有 push、PR、merge 或自动合入，外部 CI、独立
+  review 和 owner consent 仍是后续门禁。
+
+## Provider refresh record（2026-09-09，e42 historical）
 
 本次 provider refresh 将 `D:\project\harness-anything` 的 `main` 从旧绑定
 `ff0caa80487a063ec203f13a64aad8539d03ac53` 快进到已核验的

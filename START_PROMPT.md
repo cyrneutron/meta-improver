@@ -10,13 +10,13 @@
 6. `D:\project\harness-anything\docs-release\architecture\zh\04-gates-in-the-pipeline.md`
 
 当前已验证的基线（2026-09-09）：HA provider 为 `D:\project\harness-anything`，commit 为
-`e42c2149abd32845953401778d7d82fa55bcfa5b`，CLI version 为 `0.0.1`，build id 为
-`3c95579e-7331-44e6-920a-b2c0e6f331f3`；Windows Node 为 `v24.11.1`，Python 为 `3.12.10`。
+`c4330a85d06ed3a650965b26cb86d0aad49edc48`，CLI version 为 `0.0.1`，build id 为
+`1942211c-e727-4c18-867a-268bba08ba12`；Windows Node 为 `v24.11.1`，Python 为 `3.12.10`。
 HA target 为 `D:\project\ha-target`，当前 branch 为 `codex/ha-target-latest-20260909`，HEAD 为
-`e42c2149abd32845953401778d7d82fa55bcfa5b`，与已核验的 `upstream/main` 相同；旧分支
+`c4330a85d06ed3a650965b26cb86d0aad49edc48`，与已核验的 `upstream/main` 相同；旧分支
 `codex/windows-provider-runtime-gui-20260908` 仍保留。目标项目源码、测试和 Harness 生命周期
-仍由目标 Harness agent/runtime 执行；本次 runtime 启动失败后的 source-only ref 切换不等于目标
-task execution，不能伪造为 agent 已完成。
+仍由目标 Harness agent/runtime 执行；此前 runtime 启动失败后的受控 source ref fast-forward 不等于
+目标 task execution，不能伪造为 agent 已完成。
 优先调用
 `D:\project\harness-anything\packages\cli\dist\cli\src\index.js`，不要依赖 PATH 中的全局 `ha`。
 
