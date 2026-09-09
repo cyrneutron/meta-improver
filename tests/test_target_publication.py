@@ -465,4 +465,4 @@ def test_cli_requires_typed_admission_file(tmp_path: Path):
     )
 
     assert result_value.exit_code == 2
-    assert "--admission-file" in result_value.output
+    assert "Missing option" in result_value.output
