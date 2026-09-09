@@ -6,6 +6,7 @@ import pytest
 
 from src.acceptance import (
     BaselineGateEvidence,
+    CandidateAcceptanceReceipt,
     QualityGateEvidence,
     ValidationGateEvidence,
     accept_candidate,
@@ -455,3 +456,55 @@ def test_pipeline_binds_successful_publication_receipt(tmp_path):
         publication,
     )
     assert result.pipeline_plan.publication_receipt_hash == publication.receipt_hash
+
+
+def test_pipeline_rejects_publication_bound_to_a_different_acceptance_receipt(tmp_path):
+    baseline, hypothesis, candidate, acceptance_plan, acceptance_receipt = _fixtures()
+    other_acceptance_receipt = CandidateAcceptanceReceipt(
+        acceptance_plan=acceptance_plan,
+        plan_hash=acceptance_plan.plan_hash,
+        reason="a different accepted receipt reason",
+    )
+    admission = CandidateAcceptanceAdmission(
+        acceptance_receipt=other_acceptance_receipt,
+        repository="cyrneutron/harness-anything",
+        target_task_id="task-publication",
+        accepted_execution_id="exe-publication",
+        accepted_commit="a" * 40,
+        target_root=tmp_path,
+        expected_remote="https://github.com/cyrneutron/harness-anything.git",
+    )
+    publication_request = TargetPublicationRequest(
+        admission=admission,
+        title="publish accepted target",
+        body="A bounded publication body.",
+        poll_interval_seconds=0,
+    )
+    publication = TargetPublicationReceipt(
+        status=TargetPublicationStatus.SUCCEEDED,
+        admission=admission,
+        request_hash=publication_request.request_hash,
+        repository=publication_request.repository,
+        target_task_id=publication_request.target_task_id,
+        accepted_execution_id=publication_request.accepted_execution_id,
+        accepted_commit=publication_request.accepted_commit,
+        acceptance_plan_hash=acceptance_plan.plan_hash,
+        target_root=tmp_path,
+        expected_remote=publication_request.expected_origin,
+        head_branch=publication_request.head_branch,
+        pr_number=7,
+        pr_url="https://github.com/cyrneutron/harness-anything/pull/7",
+        checks=[RequiredCheck(name="test", state="SUCCESS")],
+        poll_attempts=1,
+        observed_at="2026-01-01T00:00:00Z",
+    )
+
+    with pytest.raises(PipelineError, match="accepted candidate receipt"):
+        run_pipeline(
+            baseline,
+            hypothesis,
+            candidate,
+            acceptance_plan,
+            acceptance_receipt,
+            publication,
+        )

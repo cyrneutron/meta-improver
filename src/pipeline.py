@@ -573,6 +573,11 @@ def _validate_in_order(
                 "publication receipt is not bound to the acceptance plan",
                 stage=AttemptStage.ACCEPTANCE_EVALUATED,
             )
+        if publication.admission.acceptance_receipt.receipt_hash != receipt.receipt_hash:
+            raise PipelineError(
+                "publication receipt is not bound to the accepted candidate receipt",
+                stage=AttemptStage.ACCEPTANCE_EVALUATED,
+            )
 
     try:
         normalized = PipelineInput(

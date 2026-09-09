@@ -93,7 +93,7 @@ class TargetPublicationRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    admission: CandidateAcceptanceAdmission | None = None
+    admission: CandidateAcceptanceAdmission
     repository: str | None = None
     target_task_id: str | None = None
     accepted_execution_id: str | None = None
@@ -106,21 +106,18 @@ class TargetPublicationRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_admission(self) -> "TargetPublicationRequest":
-        if self.admission is not None:
-            admission = rehydrate_candidate_acceptance_admission(self.admission)
-            for field in ("repository", "target_task_id", "accepted_execution_id", "accepted_commit"):
-                supplied = getattr(self, field)
-                expected = getattr(admission, field)
-                if supplied is not None and supplied != expected:
-                    raise ValueError(f"{field} is not bound to acceptance admission")
-                object.__setattr__(self, field, expected)
+        admission = rehydrate_candidate_acceptance_admission(self.admission)
+        for field in ("repository", "target_task_id", "accepted_execution_id", "accepted_commit"):
+            supplied = getattr(self, field)
+            expected = getattr(admission, field)
+            if supplied is not None and supplied != expected:
+                raise ValueError(f"{field} is not bound to acceptance admission")
+            object.__setattr__(self, field, expected)
         if any(getattr(self, field) is None for field in ("repository", "target_task_id", "accepted_execution_id", "accepted_commit")):
             raise ValueError("publication request requires repository, task, execution, and commit")
         return self
 
     def require_admission(self) -> CandidateAcceptanceAdmission:
-        if self.admission is None:
-            raise TargetPublicationError("typed candidate acceptance admission is required")
         return rehydrate_candidate_acceptance_admission(self.admission)
 
     @field_validator("repository")
@@ -172,7 +169,7 @@ class TargetPublicationRequest(BaseModel):
 
     @property
     def expected_origin(self) -> str:
-        return self.admission.expected_remote if self.admission is not None else f"https://github.com/{self.repository}.git"
+        return self.admission.expected_remote
 
     @property
     def request_hash(self) -> str:
@@ -188,15 +185,14 @@ class TargetPublicationRequest(BaseModel):
             "base_branch": self.base_branch,
             "head_branch": self.head_branch,
         }
-        if self.admission is not None:
-            material.update(
-                {
-                    "acceptance_plan_hash": self.admission.acceptance_receipt.plan_hash,
-                    "admission_hash": self.admission.admission_hash,
-                    "target_root": str(self.admission.target_root),
-                    "expected_remote": self.admission.expected_remote,
-                }
-            )
+        material.update(
+            {
+                "acceptance_plan_hash": self.admission.acceptance_receipt.plan_hash,
+                "admission_hash": self.admission.admission_hash,
+                "target_root": str(self.admission.target_root),
+                "expected_remote": self.admission.expected_remote,
+            }
+        )
         return material
 
 
@@ -252,15 +248,15 @@ class TargetPublicationReceipt(BaseModel):
         default="target-publication-receipt/v1", alias="schema", serialization_alias="schema"
     )
     status: TargetPublicationStatus
-    admission: CandidateAcceptanceAdmission | None = None
+    admission: CandidateAcceptanceAdmission
     request_hash: str = Field(pattern=_DIGEST.pattern)
     repository: str
     target_task_id: str
     accepted_execution_id: str
     accepted_commit: str = Field(pattern=_COMMIT.pattern)
-    acceptance_plan_hash: str | None = Field(default=None, pattern=_DIGEST.pattern)
-    target_root: Path | None = None
-    expected_remote: str | None = None
+    acceptance_plan_hash: str = Field(pattern=_DIGEST.pattern)
+    target_root: Path
+    expected_remote: str
     head_branch: str
     base_branch: str = "main"
     pr_number: int | None = Field(default=None, ge=1)
@@ -284,15 +280,17 @@ class TargetPublicationReceipt(BaseModel):
     @field_validator("target_root")
     @classmethod
     def receipt_root_is_absolute(cls, value: Path | None) -> Path | None:
-        if value is not None and not value.is_absolute():
+        if not value.is_absolute():
             raise ValueError("target_root must be an absolute path")
         return value
 
     @field_validator("expected_remote")
     @classmethod
     def receipt_remote_is_safe(cls, value: str | None) -> str | None:
-        if value is not None and (
-            not value.startswith("https://github.com/") or not value.endswith(".git") or _SECRET.search(value)
+        if (
+            not value.startswith("https://github.com/")
+            or not value.endswith(".git")
+            or _SECRET.search(value)
         ):
             raise ValueError("expected_remote must be a GitHub HTTPS git remote")
         return value
@@ -335,20 +333,19 @@ class TargetPublicationReceipt(BaseModel):
 
     @model_validator(mode="after")
     def validate_bindings_and_hash(self) -> TargetPublicationReceipt:
-        if self.admission is not None:
-            try:
-                admission = rehydrate_candidate_acceptance_admission(self.admission)
-            except Exception as exc:
-                raise ValueError("publication receipt contains an invalid admission") from exc
-            if self.accepted_commit != admission.accepted_commit:
-                raise ValueError("publication receipt commit is not bound to admission")
-            if self.acceptance_plan_hash != admission.acceptance_receipt.plan_hash:
-                raise ValueError("publication receipt acceptance plan is not bound to admission")
-            if self.repository != admission.repository or self.target_task_id != admission.target_task_id:
-                raise ValueError("publication receipt identity is not bound to admission")
-            if self.target_root != admission.target_root or self.expected_remote != admission.expected_remote:
-                raise ValueError("publication receipt target identity is not bound to admission")
-        if self.expected_remote is not None and self.expected_remote != f"https://github.com/{self.repository}.git":
+        try:
+            admission = rehydrate_candidate_acceptance_admission(self.admission)
+        except Exception as exc:
+            raise ValueError("publication receipt contains an invalid admission") from exc
+        if self.accepted_commit != admission.accepted_commit:
+            raise ValueError("publication receipt commit is not bound to admission")
+        if self.acceptance_plan_hash != admission.acceptance_receipt.plan_hash:
+            raise ValueError("publication receipt acceptance plan is not bound to admission")
+        if self.repository != admission.repository or self.target_task_id != admission.target_task_id:
+            raise ValueError("publication receipt identity is not bound to admission")
+        if self.target_root != admission.target_root or self.expected_remote != admission.expected_remote:
+            raise ValueError("publication receipt target identity is not bound to admission")
+        if self.expected_remote != f"https://github.com/{self.repository}.git":
             raise ValueError("expected_remote is not bound to repository")
         _safe_branch_task_id(self.target_task_id, "receipt target task")
         if self.head_branch != f"mi/{self.target_task_id}":
@@ -380,13 +377,12 @@ class TargetPublicationReceipt(BaseModel):
                 "base_branch": self.base_branch,
                 "head_branch": self.head_branch,
             }
-        if self.admission is not None:
-            binding.update({
-                "acceptance_plan_hash": self.acceptance_plan_hash,
-                "admission_hash": self.admission.admission_hash,
-                "target_root": str(self.target_root),
-                "expected_remote": self.expected_remote,
-            })
+        binding.update({
+            "acceptance_plan_hash": self.acceptance_plan_hash,
+            "admission_hash": self.admission.admission_hash,
+            "target_root": str(self.target_root),
+            "expected_remote": self.expected_remote,
+        })
         expected_request_hash = _digest(binding)
         if self.request_hash != expected_request_hash:
             raise ValueError("request_hash is not bound to publication request fields")
@@ -484,10 +480,9 @@ class TargetPublisher:
     ) -> TargetPublicationReceipt:
         started = datetime.now(timezone.utc)
         try:
-            if request.admission is not None:
-                admission = request.require_admission()
-                if target_root != admission.target_root:
-                    raise TargetPublicationError("target root does not match accepted admission")
+            admission = request.require_admission()
+            if target_root != admission.target_root:
+                raise TargetPublicationError("target root does not match accepted admission")
             self._verify_executables()
             self._prove_target(target_root, request)
             self._ensure_head_ref(target_root, request)
@@ -831,9 +826,9 @@ class TargetPublisher:
             target_task_id=request.target_task_id,
             accepted_execution_id=request.accepted_execution_id,
             accepted_commit=request.accepted_commit,
-            acceptance_plan_hash=(request.admission.acceptance_receipt.plan_hash if request.admission else None),
-            target_root=request.admission.target_root if request.admission is not None else None,
-            expected_remote=request.expected_origin if request.admission is not None else None,
+            acceptance_plan_hash=request.admission.acceptance_receipt.plan_hash,
+            target_root=request.admission.target_root,
+            expected_remote=request.expected_origin,
             head_branch=request.head_branch,
             base_branch=request.base_branch,
             pr_number=pull_request.number if pull_request else None,

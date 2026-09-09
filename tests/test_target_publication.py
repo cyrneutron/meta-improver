@@ -1,12 +1,21 @@
 import hashlib
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
 
-import src.cli as cli_module
 from src.cli import app
+from src.acceptance import (
+    BaselineGateEvidence,
+    CandidateAcceptanceAdmission,
+    QualityGateEvidence,
+    ValidationGateEvidence,
+    accept_candidate,
+    plan_candidate_acceptance,
+)
+from src.attribution import AttributionHypothesis, BaselineObservation, CandidateChangeEvidence
 from src.ha_cli import ProcessResult
 from src.storage import Ledger
 from src.target_publication import (
@@ -72,12 +81,71 @@ def config(tmp_path: Path) -> TargetPublicationConfig:
     )
 
 
-def request(**changes) -> TargetPublicationRequest:
+def admission(target_root: Path) -> CandidateAcceptanceAdmission:
+    baseline = BaselineObservation(
+        attempt_id="attempt-publication",
+        signal_signature="signal-publication",
+        base_commit=COMMIT,
+        passed=False,
+        command="pytest tests/test_target.py",
+        summary="publication fixture baseline reproduces the failure",
+        observed_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    hypothesis = AttributionHypothesis(
+        baseline_hash=baseline.observation_hash,
+        category="dependency",
+        confidence=0.8,
+        root_cause="the publication fixture dependency changed",
+        affected_paths=["src/target.py"],
+        model_version="model-publication",
+        prompt_version="prompt-publication",
+    )
+    candidate = CandidateChangeEvidence(
+        hypothesis_hash=hypothesis.hypothesis_hash,
+        baseline_hash=baseline.observation_hash,
+        patch_hash="sha256:" + "b" * 64,
+        targeted_tests=["pytest tests/test_target.py"],
+        regression_tests=["pytest -q"],
+        residual_risk="no known publication fixture risk",
+    )
+    plan = plan_candidate_acceptance(
+        baseline,
+        candidate,
+        BaselineGateEvidence(
+            baseline_hash=baseline.observation_hash,
+            reproduction_command="pytest tests/test_target.py",
+            reproduction_evidence="exit code 1: failure reproduced",
+        ),
+        ValidationGateEvidence(
+            candidate_hash=candidate.evidence_hash,
+            hypothesis_hash=hypothesis.hypothesis_hash,
+            patch_hash=candidate.patch_hash,
+            targeted_test_count=1,
+            regression_test_count=1,
+            targeted_evidence="targeted tests passed",
+            regression_evidence="regression tests passed",
+        ),
+        QualityGateEvidence(
+            complexity_delta=0,
+            cost_units=1,
+            quality_evidence="quality and security checks passed",
+        ),
+        hypothesis=hypothesis,
+    )
+    return CandidateAcceptanceAdmission(
+        acceptance_receipt=accept_candidate(plan),
+        repository=REPOSITORY,
+        target_task_id=TASK_ID,
+        accepted_execution_id=EXECUTION_ID,
+        accepted_commit=COMMIT,
+        target_root=target_root,
+        expected_remote=f"https://github.com/{REPOSITORY}.git",
+    )
+
+
+def request(target_root: Path | None = None, **changes) -> TargetPublicationRequest:
     values = {
-        "repository": REPOSITORY,
-        "target_task_id": TASK_ID,
-        "accepted_execution_id": EXECUTION_ID,
-        "accepted_commit": COMMIT,
+        "admission": admission(target_root or Path.cwd()),
         "title": "fix: bounded publication",
         "body": "# English\nA bounded publication body with sufficient declared context.\n\n---\n\n# 中文\n这是足够长的双语说明正文，用于受控发布和门禁验证。",
         "max_poll_attempts": 2,
@@ -97,7 +165,7 @@ def target_proof(request_value: TargetPublicationRequest):
 
 
 def test_publish_creates_deterministic_ref_pr_and_success_receipt(tmp_path: Path):
-    value = request()
+    value = request(tmp_path)
     transport = FixtureTransport(
         [
             *target_proof(value),
@@ -146,7 +214,7 @@ def test_publish_creates_deterministic_ref_pr_and_success_receipt(tmp_path: Path
 
 
 def test_publish_reuses_matching_pr_and_appends_receipt_to_ledger(tmp_path: Path):
-    value = request()
+    value = request(tmp_path)
     existing = {
         "object": {"sha": COMMIT},
     }
@@ -178,7 +246,7 @@ def test_publish_reuses_matching_pr_and_appends_receipt_to_ledger(tmp_path: Path
 
 
 def test_publish_rejects_dirty_target_before_any_github_mutation(tmp_path: Path):
-    value = request()
+    value = request(tmp_path)
     transport = FixtureTransport(
         [
             result((value.expected_origin + "\n").encode()),
@@ -194,7 +262,7 @@ def test_publish_rejects_dirty_target_before_any_github_mutation(tmp_path: Path)
 
 
 def test_publish_rejects_unknown_branch_lookup_error_before_ref_creation(tmp_path: Path):
-    value = request()
+    value = request(tmp_path)
     transport = FixtureTransport(
         [
             *target_proof(value),
@@ -219,7 +287,7 @@ def test_publish_rejects_unknown_branch_lookup_error_before_ref_creation(tmp_pat
     ],
 )
 def test_publish_never_accepts_non_successful_required_checks(tmp_path: Path, states, expected):
-    value = request(max_poll_attempts=2)
+    value = request(tmp_path, max_poll_attempts=2)
     matching_pr = {
         "number": 19,
         "url": f"https://github.com/{REPOSITORY}/pull/19",
@@ -249,7 +317,7 @@ def test_publish_never_accepts_non_successful_required_checks(tmp_path: Path, st
 
 
 def test_publication_rejects_drifted_executable_before_target_access(tmp_path: Path):
-    value = request()
+    value = request(tmp_path)
     cfg = config(tmp_path)
     cfg.git_executable.write_text("changed")
 
@@ -260,6 +328,11 @@ def test_publication_rejects_drifted_executable_before_target_access(tmp_path: P
 
 
 def test_request_and_receipt_reject_unsafe_or_unbound_values():
+    with pytest.raises(ValueError, match="admission"):
+        TargetPublicationRequest(
+            title="fix: missing admission",
+            body="A publication request without typed acceptance evidence.",
+        )
     with pytest.raises(ValueError, match="full 40-character SHA"):
         request(accepted_commit="a" * 39)
     with pytest.raises(ValueError, match="secret-shaped"):
@@ -269,11 +342,15 @@ def test_request_and_receipt_reject_unsafe_or_unbound_values():
     with pytest.raises(ValueError, match="unsafe to derive"):
         TargetPublicationReceipt(
             status=TargetPublicationStatus.REJECTED,
+            admission=admission(Path.cwd()),
             request_hash="sha256:" + "0" * 64,
             repository=REPOSITORY,
             target_task_id="task:branch",
             accepted_execution_id=EXECUTION_ID,
             accepted_commit=COMMIT,
+            acceptance_plan_hash=admission(Path.cwd()).acceptance_receipt.plan_hash,
+            target_root=Path.cwd(),
+            expected_remote=f"https://github.com/{REPOSITORY}.git",
             head_branch="mi/task:branch",
             reason="rejected",
             observed_at="2026-09-04T00:00:00Z",
@@ -281,11 +358,15 @@ def test_request_and_receipt_reject_unsafe_or_unbound_values():
     with pytest.raises(ValueError, match="not bound"):
         TargetPublicationReceipt(
             status=TargetPublicationStatus.REJECTED,
+            admission=admission(Path.cwd()),
             request_hash="sha256:" + "0" * 64,
             repository=REPOSITORY,
             target_task_id=TASK_ID,
             accepted_execution_id=EXECUTION_ID,
             accepted_commit=COMMIT,
+            acceptance_plan_hash=admission(Path.cwd()).acceptance_receipt.plan_hash,
+            target_root=Path.cwd(),
+            expected_remote=f"https://github.com/{REPOSITORY}.git",
             head_branch="mi/different-task",
             reason="rejected",
             observed_at="2026-09-04T00:00:00Z",
@@ -293,15 +374,19 @@ def test_request_and_receipt_reject_unsafe_or_unbound_values():
 
 
 def test_success_receipt_requires_bound_request_and_poll(tmp_path: Path):
-    value = request()
+    value = request(tmp_path)
     with pytest.raises(ValueError, match="request_hash"):
         TargetPublicationReceipt(
             status=TargetPublicationStatus.SUCCEEDED,
+            admission=value.admission,
             request_hash="sha256:" + "0" * 64,
             repository=value.repository,
             target_task_id=value.target_task_id,
             accepted_execution_id=value.accepted_execution_id,
             accepted_commit=value.accepted_commit,
+            acceptance_plan_hash=value.admission.acceptance_receipt.plan_hash,
+            target_root=tmp_path,
+            expected_remote=value.expected_origin,
             head_branch=value.head_branch,
             pr_number=1,
             pr_url=f"https://github.com/{value.repository}/pull/1",
@@ -312,7 +397,7 @@ def test_success_receipt_requires_bound_request_and_poll(tmp_path: Path):
 
 
 def test_required_check_query_nonzero_is_rejected(tmp_path: Path):
-    value = request()
+    value = request(tmp_path)
     matching_pr = {
         "number": 19,
         "url": f"https://github.com/{REPOSITORY}/pull/19",
@@ -334,11 +419,15 @@ def test_required_check_query_nonzero_is_rejected(tmp_path: Path):
     with pytest.raises(ValueError, match="URL is not bound"):
         TargetPublicationReceipt(
             status=TargetPublicationStatus.REJECTED,
+            admission=value.admission,
             request_hash="sha256:" + "0" * 64,
             repository=REPOSITORY,
             target_task_id=TASK_ID,
             accepted_execution_id=EXECUTION_ID,
             accepted_commit=COMMIT,
+            acceptance_plan_hash=value.admission.acceptance_receipt.plan_hash,
+            target_root=tmp_path,
+            expected_remote=value.expected_origin,
             head_branch=f"mi/{TASK_ID}",
             pr_number=1,
             pr_url="https://github.com/other/repository/pull/1",
@@ -347,30 +436,10 @@ def test_required_check_query_nonzero_is_rejected(tmp_path: Path):
         )
 
 
-def test_cli_returns_nonzero_for_non_success_receipt(tmp_path: Path, monkeypatch):
+def test_cli_requires_typed_admission_file(tmp_path: Path):
     body_file = tmp_path / "body.md"
     body_file.write_text("A safe sufficiently long publication body.")
     config_value = config(tmp_path)
-
-    class Publisher:
-        def __init__(self, captured_config):
-            assert captured_config.git_sha256 == config_value.git_sha256
-
-        def publish(self, _root, value, *, ledger=None):
-            assert ledger is None
-            return TargetPublicationReceipt(
-                status=TargetPublicationStatus.PENDING,
-                request_hash=value.request_hash,
-                repository=value.repository,
-                target_task_id=value.target_task_id,
-                accepted_execution_id=value.accepted_execution_id,
-                accepted_commit=value.accepted_commit,
-                head_branch=value.head_branch,
-                reason="checks pending",
-                observed_at="2026-09-04T00:00:00Z",
-            )
-
-    monkeypatch.setattr(cli_module, "TargetPublisher", Publisher)
     result_value = CliRunner().invoke(
         app,
         [
@@ -388,14 +457,6 @@ def test_cli_returns_nonzero_for_non_success_receipt(tmp_path: Path, monkeypatch
             config_value.gh_sha256,
             "--github-home",
             str(tmp_path),
-            "--repository",
-            REPOSITORY,
-            "--target-task-id",
-            TASK_ID,
-            "--accepted-execution-id",
-            EXECUTION_ID,
-            "--accepted-commit",
-            COMMIT,
             "--title",
             "fix: bounded publication",
             "--body-file",
@@ -403,6 +464,5 @@ def test_cli_returns_nonzero_for_non_success_receipt(tmp_path: Path, monkeypatch
         ],
     )
 
-    assert result_value.exit_code == 1
-    payload = json.loads(result_value.stdout)
-    assert "admission-file" in payload["error"]
+    assert result_value.exit_code == 2
+    assert "Missing option" in result_value.output
