@@ -144,6 +144,11 @@ def test_nested_report_input_is_redacted_and_control_fields_are_rejected() -> No
     with pytest.raises(ValidationError):
         ReportArtifact.model_validate(raw_payload)
 
+    raw_key_payload = value.model_dump(mode="json", by_alias=True)
+    raw_key_payload["bad\tkey"] = "value"
+    with pytest.raises(ValidationError):
+        ReportArtifact.model_validate(raw_key_payload)
+
     with pytest.raises(ValidationError):
         ReportEvidence(ref="evidence\ninvalid", kind="test", summary="summary")
     with pytest.raises(ValidationError):
@@ -174,6 +179,12 @@ def test_nested_report_input_is_redacted_and_control_fields_are_rejected() -> No
         report("a-r1", "reviewer_a", 1, source_identity="source\nidentity")
     with pytest.raises(ValidationError):
         report("a-r1", "reviewer_a", 1, summary="x" * 8_001)
+
+
+@pytest.mark.parametrize("bad_control", ["summary\tinvalid", "summary\x1binvalid", "summary\vinvalid"])
+def test_all_ascii_control_characters_are_rejected(bad_control: str) -> None:
+    with pytest.raises(ValidationError):
+        report("a-r1", "reviewer_a", 1, summary=bad_control)
 
 
 def test_forward_duplicate_and_post_synthesis_reports_are_rejected() -> None:

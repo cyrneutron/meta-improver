@@ -16,7 +16,7 @@ from src.models.contracts import redact
 _HASH = re.compile(r"^sha256:[0-9a-f]{64}$")
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$")
 _REPORT_REF = re.compile(r"^report/[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$")
-_CONTROL = re.compile(r"[\x00\r\n]")
+_CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 _REVIEW_SEQUENCE = (("reviewer_a", 1), ("reviewer_b", 1), ("reviewer_a", 2))
 
 
@@ -34,6 +34,9 @@ def _redact_input(value: Any) -> Any:
     if isinstance(value, (set, frozenset)):
         raise ValueError("unordered report input is not supported")
     if isinstance(value, Mapping):
+        for key in value:
+            if isinstance(key, str):
+                _reject_control_input(key, "report input key")
         return redact({key: _redact_input(item) for key, item in value.items()})
     if isinstance(value, list):
         return [_redact_input(item) for item in value]
