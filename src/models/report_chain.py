@@ -36,6 +36,8 @@ def _redact_input(value: Any) -> Any:
         return [_redact_input(item) for item in value]
     if isinstance(value, tuple):
         return tuple(_redact_input(item) for item in value)
+    if isinstance(value, str):
+        _reject_control_input(value, "report input")
     return redact(value)
 
 

@@ -134,6 +134,16 @@ def test_nested_report_input_is_redacted_and_control_fields_are_rejected() -> No
     serialized = value.model_dump_json()
     assert "sk-example-secret" not in serialized
 
+    raw_payload = value.model_dump(mode="json", by_alias=True)
+    raw_payload["findings"][0]["assessment"] = secret
+    raw_payload["evidence"][0]["summary"] = secret
+    hydrated = ReportArtifact.model_validate(raw_payload)
+    assert "sk-example-secret" not in hydrated.model_dump_json()
+
+    raw_payload["findings"][0]["assessment"] = secret + "\n"
+    with pytest.raises(ValidationError):
+        ReportArtifact.model_validate(raw_payload)
+
     with pytest.raises(ValidationError):
         ReportEvidence(ref="evidence\ninvalid", kind="test", summary="summary")
     with pytest.raises(ValidationError):
