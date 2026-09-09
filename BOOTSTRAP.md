@@ -1,10 +1,10 @@
 # Meta-Improver Bootstrap
 
 > 本文件保留 2026-08-29 至 2026-09-04 的 Linux bootstrap 和 provider 晋升历史作为审计证据。
-> 它们不是当前运行绑定；发生冲突时，以紧随其后的 2026-09-08 Windows provider binding 和
+> 它们不是当前运行绑定；发生冲突时，以紧随其后的 2026-09-09 Windows provider binding 和
 > `PLAN.md` 当前基线为准。
 
-## 当前 Windows provider binding（2026-09-08）
+## 当前 Windows provider binding（2026-09-09）
 
 本次在本机实际核对的当前运行基线如下：
 
@@ -12,11 +12,11 @@
 |---|---|
 | MI source root | `D:\project\meta-improver` |
 | HA provider | `D:\project\harness-anything` |
-| Provider HEAD | `ff0caa80487a063ec203f13a64aad8539d03ac53` |
-| CLI version / build id | `0.0.1` / `0138c112-a20d-4801-9d7f-d1591e18e249` |
+| Provider HEAD | `e42c2149abd32845953401778d7d82fa55bcfa5b` |
+| CLI version / build id | `0.0.1` / `3c95579e-7331-44e6-920a-b2c0e6f331f3` |
 | Node / Python | `v24.11.1` / `3.12.10` |
 | HA target | `D:\project\ha-target` |
-| Target branch / HEAD | `codex/windows-provider-runtime-gui-20260908` / `e39fb7a6cbe1755bf58cbd19db5c6e0ffdad2299` |
+| Target branch / HEAD | `codex/ha-target-latest-20260909` / `e42c2149abd32845953401778d7d82fa55bcfa5b`，与 `upstream/main` 相同 |
 
 固定入口为：
 
@@ -27,6 +27,28 @@ node D:\project\harness-anything\packages\cli\dist\cli\src\index.js
 provider daemon 已按该 build 启动，loaded/disk build id 一致且 `drifted=false`。provider 工作树
 有既有 `.gitignore` 修改，必须保留；它不属于 MI 或 target task 的可写范围。HA target 是包含目标
 源树、目标 Harness ledger 和 runtime 的稳定目标路径，不能用 source-only worktree 替代。
+
+## Provider refresh record（2026-09-09）
+
+本次 provider refresh 将 `D:\project\harness-anything` 的 `main` 从旧绑定
+`ff0caa80487a063ec203f13a64aad8539d03ac53` 快进到已核验的
+`origin/main` `e42c2149abd32845953401778d7d82fa55bcfa5b`。快进没有覆盖 provider 既有
+`.gitignore` 改动；`npm ci` 完成，post-merge hook 重建 CLI/GUI，CLI disk build id 为
+`3c95579e-7331-44e6-920a-b2c0e6f331f3`。
+
+- provider daemon status：PID `6660`，`entry=dist`，loaded commit 为
+  `e42c2149abd32845953401778d7d82fa55bcfa5b`；MI 真实 `ha check` 需继续作为 build/drift
+  的最终绑定证据。
+- provider typecheck：通过；provider lint：通过。
+- `npm test -- --tier fast --tier contract`：1037 tests，1035 passed，0 failed，2 skipped；
+  两项 skip 的明确理由是 `requires POSIX file-symbolic-link semantics`，不是静默跳过。
+- `D:\project\ha-target` 的同步 runtime dispatch 在启动进程前失败，未创建目标 task、未写入目标
+  ledger；随后在 daemon `queueDepth=0`、RepoCell attached 且 tracked worktree clean 的条件下，
+  MI 仅执行 source-only ref 切换到 `codex/ha-target-latest-20260909`。旧分支
+  `codex/windows-provider-runtime-gui-20260908` / `e39fb7a6...` 仍可恢复，嵌套 Harness
+  `ha-target-identity-merge` 的 HEAD `7265dd064f2a1877527c8b04b400ef367c1309f3` 未变。
+- 这不是目标项目 task execution；MI 未写入 `D:\project\ha-target\harness` 或 `.harness`。
+- 本轮没有 push、PR、merge 或自动合入；外部 CI 和独立 review 仍是后续门禁。
 
 ## Provider refresh record（2026-09-08）
 

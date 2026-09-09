@@ -36,19 +36,25 @@
 - 每次尝试记录 `base_commit`、输入快照哈希、模型/Prompt 版本、patch 哈希、测试结果、幂等键和回滚点。
 - self-evolve 首阶段只允许离线修改 L1 Prompt/规则；权限、审计、门禁、沙箱和凭据处理属于 immutable policy core。
 
-## 当前基线（2026-09-08）
+## 当前基线（2026-09-09）
 
 MI 当前绑定的是 Windows 本地 provider/target，而不是早期 Linux 记录：
 
 - MI 源仓库：`D:\project\meta-improver`，当前分支 `main`。
-- HA provider：`D:\project\harness-anything`，HEAD `ff0caa80487a063ec203f13a64aad8539d03ac53`。
-- HA CLI version：`0.0.1`；CLI build id：`0138c112-a20d-4801-9d7f-d1591e18e249`。
+- HA provider：`D:\project\harness-anything`，HEAD `e42c2149abd32845953401778d7d82fa55bcfa5b`。
+- HA CLI version：`0.0.1`；CLI build id：`3c95579e-7331-44e6-920a-b2c0e6f331f3`。
 - Node.js：`v24.11.1`；Python：`3.12.10`。
 - HA 本地 CLI：`D:\project\harness-anything\packages\cli\dist\cli\src\index.js`，
   通过 Windows `node` 执行；provider daemon loaded/disk build id 一致，`drifted=false`。
-- HA target：`D:\project\ha-target`，当前分支
-  `codex/windows-provider-runtime-gui-20260908`，HEAD
-  `e39fb7a6cbe1755bf58cbd19db5c6e0ffdad2299`。
+- HA target：`D:\project\ha-target`，当前源库分支
+  `codex/ha-target-latest-20260909`，HEAD 与 `upstream/main` 均为
+  `e42c2149abd32845953401778d7d82fa55bcfa5b`；旧分支
+  `codex/windows-provider-runtime-gui-20260908` 及其 `e39fb7a6...` 仍保留。
+- 目标同步未形成新的目标 task execution：目标 Harness runtime 在启动进程前失败，随后 MI
+  在 daemon `queueDepth=0` 且目标 RepoCell attached 的条件下只执行了 source-only Git ref
+  切换，未写入目标 `harness/` 或 `.harness`。
+- 目标项目后续源码、测试和 Harness 生命周期仍由该项目 Harness agent/runtime 负责；MI 只做
+  身份、同步和证据核验。
 - provider 工作树保留既有 `.gitignore` 修改；MI 不覆盖、不回退该修改。
 - 详细历史验证与当前 binding 记录：见 [BOOTSTRAP.md](./BOOTSTRAP.md)。
 

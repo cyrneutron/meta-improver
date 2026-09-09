@@ -9,11 +9,15 @@
 5. `D:\project\harness-anything\docs-release\architecture\zh\03-projection.md`
 6. `D:\project\harness-anything\docs-release\architecture\zh\04-gates-in-the-pipeline.md`
 
-当前已验证的基线（2026-09-08）：HA provider 为 `D:\project\harness-anything`，commit 为
-`ff0caa80487a063ec203f13a64aad8539d03ac53`，CLI version 为 `0.0.1`，build id 为
-`0138c112-a20d-4801-9d7f-d1591e18e249`；Windows Node 为 `v24.11.1`，Python 为 `3.12.10`。
-HA target 为 `D:\project\ha-target`，分支为 `codex/windows-provider-runtime-gui-20260908`，commit
-为 `e39fb7a6cbe1755bf58cbd19db5c6e0ffdad2299`。优先调用
+当前已验证的基线（2026-09-09）：HA provider 为 `D:\project\harness-anything`，commit 为
+`e42c2149abd32845953401778d7d82fa55bcfa5b`，CLI version 为 `0.0.1`，build id 为
+`3c95579e-7331-44e6-920a-b2c0e6f331f3`；Windows Node 为 `v24.11.1`，Python 为 `3.12.10`。
+HA target 为 `D:\project\ha-target`，当前 branch 为 `codex/ha-target-latest-20260909`，HEAD 为
+`e42c2149abd32845953401778d7d82fa55bcfa5b`，与已核验的 `upstream/main` 相同；旧分支
+`codex/windows-provider-runtime-gui-20260908` 仍保留。目标项目源码、测试和 Harness 生命周期
+仍由目标 Harness agent/runtime 执行；本次 runtime 启动失败后的 source-only ref 切换不等于目标
+task execution，不能伪造为 agent 已完成。
+优先调用
 `D:\project\harness-anything\packages\cli\dist\cli\src\index.js`，不要依赖 PATH 中的全局 `ha`。
 
 `D:\project\harness-anything` 是稳定 CLI provider，保留其既有 `.gitignore` 修改，不作为候选实现
