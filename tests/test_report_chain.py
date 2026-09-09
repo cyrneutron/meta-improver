@@ -78,6 +78,75 @@ def test_report_and_chain_are_frozen_and_hash_bound() -> None:
         rehydrate_report_artifact(ReportArtifact.model_validate(payload))
 
 
+def test_chain_is_frozen_and_chain_hash_is_verified() -> None:
+    chain = ReportChain(reports=(report("a-r1", "reviewer_a", 1),))
+    with pytest.raises((ValidationError, TypeError)):
+        chain.reports += (report("b-r1", "reviewer_b", 1, ("report/a-r1",)),)
+
+    payload = chain.model_dump(mode="json", by_alias=True)
+    payload["chain_hash"] = "sha256:" + "0" * 64
+    with pytest.raises((ReportChainError, ValidationError)):
+        rehydrate_report_chain(ReportChain.model_validate(payload))
+
+
+def test_chain_requires_reviewer_roles_and_rounds_in_order() -> None:
+    first = report("a-r1", "reviewer_a", 1)
+    with pytest.raises((ReportChainError, ValidationError), match="reviewer_b"):
+        ReportChain(reports=(first, report("a-r2", "reviewer_a", 2, ("report/a-r1",))))
+    with pytest.raises((ReportChainError, ValidationError), match="round 1"):
+        ReportChain(reports=(first, report("b-r2", "reviewer_b", 2, ("report/a-r1",))))
+
+    second = report("b-r1", "reviewer_b", 1, ("report/a-r1",))
+    with pytest.raises((ReportChainError, ValidationError), match="reviewer_a"):
+        ReportChain(reports=(first, second, report("b-r2", "reviewer_b", 2, ("report/b-r1",))))
+    with pytest.raises((ReportChainError, ValidationError), match="round 2"):
+        ReportChain(reports=(first, second, report("a-r3", "reviewer_a", 3, ("report/b-r1",))))
+
+
+def test_append_revalidates_existing_chain_before_extending() -> None:
+    chain = ReportChain(reports=(report("a-r1", "reviewer_a", 1),))
+    object.__setattr__(chain, "chain_hash", "sha256:" + "0" * 64)
+    with pytest.raises(ReportChainError, match="integrity"):
+        append_report(chain, report("b-r1", "reviewer_b", 1, ("report/a-r1",)))
+
+
+def test_nested_report_input_is_redacted_and_control_fields_are_rejected() -> None:
+    secret = "Token sk-example-secret"
+    value = report(
+        "a-r1",
+        "reviewer_a",
+        1,
+        summary=secret,
+        source_identity=secret,
+        target_harness_identity=secret,
+        findings=(
+            ReportFinding(
+                claim_id="claim-a-r1",
+                assessment=secret,
+                severity="high",
+                evidence_refs=(secret,),
+            ),
+        ),
+        evidence=(ReportEvidence(ref="evidence-a-r1", kind="artifact", summary=secret),),
+        challenged_claims=(secret,),
+        open_disagreements=(secret,),
+    )
+    serialized = value.model_dump_json()
+    assert "sk-example-secret" not in serialized
+
+    with pytest.raises(ValidationError):
+        ReportEvidence(ref="evidence\ninvalid", kind="test", summary="summary")
+    with pytest.raises(ValidationError):
+        ReportFinding(
+            claim_id="claim-a-r1",
+            assessment="assessment",
+            severity="low",
+            evidence_refs=("evidence\ninvalid",),
+        )
+    with pytest.raises(ValidationError):
+        report("a-r1", "reviewer_a", 1, summary="x" * 8_001)
+
+
 def test_forward_duplicate_and_post_synthesis_reports_are_rejected() -> None:
     first = report("a-r1", "reviewer_a", 1)
     with pytest.raises((ReportChainError, ValidationError), match="forward"):

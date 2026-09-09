@@ -16,6 +16,7 @@ _HASH = re.compile(r"^sha256:[0-9a-f]{64}$")
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$")
 _REPORT_REF = re.compile(r"^report/[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$")
 _CONTROL = re.compile(r"[\x00\r\n]")
+_REVIEW_SEQUENCE = (("reviewer_a", 1), ("reviewer_b", 1), ("reviewer_a", 2))
 
 
 def _canonical(value: Any) -> str:
@@ -27,6 +28,8 @@ def _digest(value: Any) -> str:
 
 
 def _redact_input(value: Any) -> Any:
+    if isinstance(value, BaseModel):
+        return _redact_input(value.model_dump(mode="python", by_alias=True))
     if isinstance(value, dict):
         return redact({key: _redact_input(item) for key, item in value.items()})
     if isinstance(value, list):
@@ -87,7 +90,13 @@ class ReportFinding(BaseModel):
     @field_validator("evidence_refs")
     @classmethod
     def bounded_evidence_refs(cls, values: tuple[str, ...]) -> tuple[str, ...]:
-        if any(not isinstance(value, str) or not value.strip() or len(value) > 500 for value in values):
+        if any(
+            not isinstance(value, str)
+            or not value.strip()
+            or len(value) > 500
+            or _CONTROL.search(value)
+            for value in values
+        ):
             raise ValueError("evidence_refs are invalid")
         return values
 
@@ -191,6 +200,20 @@ class ReportChain(BaseModel):
                     raise ReportChainError(f"report reference is missing or points forward: {reference}")
             if report.reviewer_role == "leader_synthesis" and index != len(self.reports) - 1:
                 raise ReportChainError("leader synthesis must be the final report")
+            if index < len(_REVIEW_SEQUENCE):
+                expected_role, expected_round = _REVIEW_SEQUENCE[index]
+                if report.reviewer_role != expected_role:
+                    raise ReportChainError(
+                        f"report {index + 1} must be {expected_role}, got {report.reviewer_role}"
+                    )
+                if report.round != expected_round:
+                    raise ReportChainError(
+                        f"report {index + 1} must use round {expected_round}, got {report.round}"
+                    )
+            elif report.reviewer_role != "leader_synthesis":
+                raise ReportChainError("the fourth report must be leader_synthesis")
+            elif report.round != 3:
+                raise ReportChainError("leader synthesis must use round 3")
             seen[report.report_id] = report
 
         expected = _digest([report.report_hash for report in self.reports])
@@ -203,6 +226,7 @@ class ReportChain(BaseModel):
 def append_report(chain: ReportChain, report: ReportArtifact) -> ReportChain:
     """Return a new chain after validating one terminal report append."""
     try:
+        chain = rehydrate_report_chain(chain)
         report = rehydrate_report_artifact(report)
         return ReportChain(reports=chain.reports + (report,))
     except ReportChainError:
