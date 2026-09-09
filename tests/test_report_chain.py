@@ -89,6 +89,13 @@ def test_chain_is_frozen_and_chain_hash_is_verified() -> None:
         rehydrate_report_chain(ReportChain.model_validate(payload))
 
 
+def test_chain_rejects_unordered_report_collections() -> None:
+    first = report("a-r1", "reviewer_a", 1)
+    for reports in ({first}, frozenset({first})):
+        with pytest.raises(ValidationError, match="unordered report input"):
+            ReportChain(reports=reports)
+
+
 def test_chain_requires_reviewer_roles_and_rounds_in_order() -> None:
     first = report("a-r1", "reviewer_a", 1)
     with pytest.raises((ReportChainError, ValidationError), match="reviewer_b"):

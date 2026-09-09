@@ -227,6 +227,13 @@ class ReportChain(BaseModel):
     reports: tuple[ReportArtifact, ...] = Field(default_factory=tuple, max_length=100)
     chain_hash: str | None = Field(default=None, pattern=_HASH.pattern)
 
+    @model_validator(mode="before")
+    @classmethod
+    def reject_unordered_reports(cls, value: Any) -> Any:
+        if isinstance(value, Mapping) and isinstance(value.get("reports"), (set, frozenset)):
+            raise ValueError("unordered report input is not supported")
+        return value
+
     @model_validator(mode="after")
     def validate_chain(self) -> ReportChain:
         seen: dict[str, ReportArtifact] = {}
