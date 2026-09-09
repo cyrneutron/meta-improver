@@ -29,14 +29,10 @@ def _digest(value: Any) -> str:
 
 
 def _redact_input(value: Any) -> Any:
+    _reject_control_input(value, "report input")
     if isinstance(value, BaseModel):
         return _redact_input(value.model_dump(mode="python", by_alias=True))
-    if isinstance(value, (set, frozenset)):
-        raise ValueError("unordered report input is not supported")
     if isinstance(value, Mapping):
-        for key in value:
-            if isinstance(key, str):
-                _reject_control_input(key, "report input key")
         return redact({key: _redact_input(item) for key, item in value.items()})
     if isinstance(value, list):
         return [_redact_input(item) for item in value]
@@ -54,12 +50,25 @@ def _safe_text(value: str, field_name: str, *, max_length: int) -> str:
 
 
 def _reject_control_input(value: Any, field_name: str) -> Any:
+    if isinstance(value, BaseModel):
+        return _reject_control_input(vars(value), field_name)
     if isinstance(value, str):
         if _CONTROL.search(value):
             raise ValueError(f"{field_name} contains control characters")
         return value
+    if isinstance(value, (set, frozenset)):
+        raise ValueError("unordered report input is not supported")
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise ValueError("report input mapping keys must be strings")
+            _reject_control_input(key, "report input key")
+            _reject_control_input(item, field_name)
+        return value
     if isinstance(value, (list, tuple)):
-        return tuple(_reject_control_input(item, field_name) for item in value)
+        for item in value:
+            _reject_control_input(item, field_name)
+        return value
     return value
 
 
@@ -229,9 +238,8 @@ class ReportChain(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def reject_unordered_reports(cls, value: Any) -> Any:
-        if isinstance(value, Mapping) and isinstance(value.get("reports"), (set, frozenset)):
-            raise ValueError("unordered report input is not supported")
+    def validate_chain_input(cls, value: Any) -> Any:
+        _reject_control_input(value, "chain input")
         return value
 
     @model_validator(mode="after")

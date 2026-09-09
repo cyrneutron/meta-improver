@@ -156,6 +156,20 @@ def test_nested_report_input_is_redacted_and_control_fields_are_rejected() -> No
     with pytest.raises(ValidationError):
         ReportArtifact.model_validate(raw_key_payload)
 
+    raw_nested_key_payload = value.model_dump(mode="python", by_alias=True)
+    raw_nested_key_payload["findings"][0][("bad\nkey",)] = "value"
+    with pytest.raises(ValidationError):
+        ReportArtifact.model_validate(raw_nested_key_payload)
+
+    tampered_finding = ReportFinding(
+        claim_id="claim-a-r1",
+        assessment="assessment",
+        severity="low",
+    )
+    object.__setattr__(tampered_finding, "assessment", "assessment\tinvalid")
+    with pytest.raises(ValidationError):
+        report("a-r1", "reviewer_a", 1, findings=(tampered_finding,))
+
     with pytest.raises(ValidationError):
         ReportEvidence(ref="evidence\ninvalid", kind="test", summary="summary")
     with pytest.raises(ValidationError):
